@@ -415,28 +415,43 @@
             if (link) { clearInterval(iv); link.click(); return resolve(); }
             // (2) Any element whose visible text is or contains the home CTA.
             // Council home tile reads "Start new job" (sometimes with a subtitle).
+            // We iterate from leaves to root by collecting candidates and
+            // sorting by ascending text length — innermost match wins.
             var all = document.querySelectorAll("button, a, div, [role=button]");
             var ctaNeedles = ["start new job", "start visit", "new visit", "new property"];
+            var hits = [];
             for (var i = 0; i < all.length; i++) {
               var el = all[i];
-              if (el.children.length > 6) continue; // skip large containers
+              if (el.children.length > 4) continue; // skip large page containers
               var t = (el.textContent || "").trim().toLowerCase();
-              if (!t) continue;
+              if (!t || t.length > 120) continue;
               for (var n = 0; n < ctaNeedles.length; n++) {
                 if (t.indexOf(ctaNeedles[n]) !== -1) {
-                  // Climb to nearest ancestor with onclick (the React handler
-                  // is on the wrapper div, not the inner span).
-                  var target = el;
-                  for (var d = 0; d < 5 && target; d++) {
-                    if (target.onclick || target.getAttribute("role") === "button") break;
-                    target = target.parentElement;
-                  }
-                  if (!target) target = el;
-                  clearInterval(iv);
-                  target.click();
-                  return resolve();
+                  hits.push({ el: el, len: t.length });
+                  break;
                 }
               }
+            }
+            if (hits.length) {
+              // Pick the shortest-text match (most specific to the CTA tile).
+              hits.sort(function (a, b) { return a.len - b.len; });
+              var matchEl = hits[0].el;
+              // Climb to nearest ancestor with an onclick handler (React puts
+              // it on the wrapper div, not the inner text span). Stop climbing
+              // once we've moved up to a too-large parent.
+              var target = matchEl;
+              for (var d = 0; d < 4 && target; d++) {
+                if (target.onclick || target.getAttribute("role") === "button") break;
+                target = target.parentElement;
+                if (target && (target.children.length > 6 || (target.textContent || "").length > 200)) {
+                  target = matchEl; // bail — clicking the inner element is safer
+                  break;
+                }
+              }
+              if (!target) target = matchEl;
+              clearInterval(iv);
+              target.click();
+              return resolve();
             }
             // (3) Hard fallback: hash navigation (Council app uses HashRouter).
             if (attempts >= 10) {

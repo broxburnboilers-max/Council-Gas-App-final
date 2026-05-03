@@ -177,12 +177,11 @@
       var doneBtn = document.getElementById("cg-sent-done");
 
       // ── Cloud queue: POST visit data to /api/submissions when queued locally ──
-      // The body sent to the admin is SANITISED so the engineer's personal
-      // identifying info (name / Gas Safe Reg / Licence) and the ON-SITE
-      // DOCUMENTATION / MATERIALS USED sections never appear on the
-      // generated gas-safety certificate. The full engineer profile is still
-      // attached separately as `engineer` so the admin can audit who did the
-      // job — it just won't auto-populate cert fields.
+      // The body sent to the admin is SANITISED so the ON-SITE DOCUMENTATION
+      // and MATERIALS USED sections — which are internal record-keeping for
+      // the engineer's phone — never get scraped onto the certificate's
+      // Faults/Notes column. The Engineer line is preserved because the
+      // engineer's name, Gas Safe Reg and Licence MUST appear on the cert.
       function sanitizeBodyForCert(rawBody) {
         if (typeof rawBody !== "string" || !rawBody) return rawBody;
         var lines = rawBody.split(/\r?\n/);
@@ -218,9 +217,8 @@
         var i = 0;
         while (i < lines.length) {
           var L = lines[i];
-          // 1) Drop the top-level `Engineer: ...` line completely.
-          if (/^\s*Engineer\s*:/i.test(L)) { i++; continue; }
-          // 2) Strip ON-SITE DOCUMENTATION / MATERIALS USED sections.
+          // Strip ON-SITE DOCUMENTATION / MATERIALS USED sections (these are
+          // engineer-only records that pollute the cert's Faults column).
           if (isStripHeading(L)) {
             // skip heading + dashed underline + content until
             // next blank-then-known-heading or property separator.

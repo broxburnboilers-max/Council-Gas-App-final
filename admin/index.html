@@ -78,15 +78,50 @@
         });
       }
 
-      function findButtonByText(text) {
+      // Find a clickable element by visible text. Bandofmates uses both
+      // <button> elements (tabs, Parse, Import All) and clickable <div>s
+      // with cursor:pointer (the home tiles).
+      function findClickableByText(text) {
+        // 1) Exact match on a real <button>.
         var btns = document.querySelectorAll("button");
         for (var i = 0; i < btns.length; i++) {
           var t = (btns[i].textContent || "").trim();
           if (t === text) return btns[i];
-          if (t.indexOf(text) !== -1) return btns[i];
+        }
+        // 2) Substring match on a <button>.
+        for (var j = 0; j < btns.length; j++) {
+          var t2 = (btns[j].textContent || "").trim();
+          if (t2.indexOf(text) !== -1) return btns[j];
+        }
+        // 3) Leaf element whose text equals `text` — climb to the nearest
+        //    ancestor that actually has a click handler (covers the home tile
+        //    divs, where the onClick is on the wrapper, not the inner span).
+        var all = document.querySelectorAll("div, span, a");
+        for (var k = 0; k < all.length; k++) {
+          var el = all[k];
+          if (el.children.length !== 0) continue;
+          var tt = (el.textContent || "").trim();
+          if (tt !== text) continue;
+          // a) Prefer the closest ancestor with an inline onclick handler.
+          var n = el;
+          while (n && n !== document.body) {
+            if (n.onclick) return n;
+            n = n.parentElement;
+          }
+          // b) Fallback to the closest cursor:pointer ancestor.
+          n = el;
+          while (n && n !== document.body) {
+            try {
+              if (getComputedStyle(n).cursor === "pointer") return n;
+            } catch (e) {}
+            n = n.parentElement;
+          }
+          return el;
         }
         return null;
       }
+      // Back-compat alias.
+      var findButtonByText = findClickableByText;
 
       function setReactInputValue(el, value) {
         var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
@@ -95,23 +130,28 @@
         el.dispatchEvent(new Event("change", { bubbles: true }));
       }
 
-      // First, dismiss the React app's internal password lock by
-      // typing the admin password and clicking Unlock App.
+      // The deployed bandofmates build no longer shows an Unlock App password
+      // gate — it boots straight to the home screen. We still try briefly in
+      // case a future build re-introduces it, but never block on it.
       async function unlockReactApp() {
-        var unlockBtn = await waitFor(function () {
-          return findButtonByText("Unlock App");
-        }, 10000);
-        var pwInput = document.querySelector('input[type="password"], input[placeholder="Password"]');
-        if (pwInput) {
-          var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-          setter.call(pwInput, ADMIN_KEY);
-          pwInput.dispatchEvent(new Event("input", { bubbles: true }));
-          pwInput.dispatchEvent(new Event("change", { bubbles: true }));
+        try {
+          var unlockBtn = await waitFor(function () {
+            return findClickableByText("Unlock App");
+          }, 1500);
+          var pwInput = document.querySelector('input[type="password"], input[placeholder="Password"]');
+          if (pwInput) {
+            var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+            setter.call(pwInput, ADMIN_KEY);
+            pwInput.dispatchEvent(new Event("input", { bubbles: true }));
+            pwInput.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+          await new Promise(function (r) { setTimeout(r, 100); });
+          unlockBtn.click();
+        } catch (e) {
+          // No lock screen — already on home. Continue.
         }
-        await new Promise(function (r) { setTimeout(r, 100); });
-        unlockBtn.click();
-        // Wait until home screen renders (one of the home buttons appears).
-        await waitFor(function () { return findButtonByText("GSC Email"); }, 6000);
+        // In either case, wait for the home tile to appear before proceeding.
+        await waitFor(function () { return findClickableByText("GSC Email"); }, 8000);
       }
 
       async function autoImport() {
@@ -178,13 +218,13 @@
           // 0. Unlock the bandofmates React app first.
           await unlockReactApp();
 
-          // 1. Click "GSC Email" home button
-          await waitFor(function () { return findButtonByText("GSC Email"); }, 8000);
-          findButtonByText("GSC Email").click();
+          // 1. Click "GSC Email" home tile (it's a div with cursor:pointer).
+          await waitFor(function () { return findClickableByText("GSC Email"); }, 8000);
+          findClickableByText("GSC Email").click();
 
           // 2. Click "Import Reply" tab
-          await waitFor(function () { return findButtonByText("Import Reply"); }, 4000);
-          findButtonByText("Import Reply").click();
+          await waitFor(function () { return findClickableByText("Import Reply"); }, 4000);
+          findClickableByText("Import Reply").click();
 
           // 3. Find the textarea and fill it
           var ta = await waitFor(function () {
@@ -198,14 +238,14 @@
 
           // 4. Click Parse Email
           await new Promise(function (r) { setTimeout(r, 200); });
-          var parseBtn = findButtonByText("Parse Email");
+          var parseBtn = findClickableByText("Parse Email");
           if (!parseBtn || parseBtn.disabled) throw new Error("Parse button unavailable");
           parseBtn.click();
 
           // 5. Wait for parse to finish, then look for an Import-style action button.
           await new Promise(function (r) { setTimeout(r, 600); });
-          var importBtn = findButtonByText("Import All") || findButtonByText("Import all") ||
-                          findButtonByText("Import Records") || findButtonByText("Import");
+          var importBtn = findClickableByText("Import All") || findClickableByText("Import all") ||
+                          findClickableByText("Import Records") || findClickableByText("Import");
           if (importBtn && !importBtn.disabled) {
             importBtn.click();
             await new Promise(function (r) { setTimeout(r, 800); });

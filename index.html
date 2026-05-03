@@ -207,16 +207,21 @@
         } catch (e) { /* ignore */ }
       }
 
+      // The 'queued' event fires when the engineer taps Send on /review.
+      // Push to the admin cloud queue so the certificate is captured even if
+      // the engineer's phone dies before they finish the day. The 'Sent'
+      // overlay (with Done button) is now driven by handleJobFinished()
+      // below — we only show it when the day is fully complete.
       window.addEventListener("citizenGas:queued", function () {
-        overlay.classList.add("show");
         pushLatestToCloud();
       });
 
+      // The Done button on the orange 'Sent' overlay is only reached when
+      // the engineer finishes the LAST job of the day. Wipe session state
+      // and bounce back to the sign-in screen.
       doneBtn.addEventListener("click", function () {
         overlay.classList.remove("show");
-        // Retry cloud push in case the engineer was offline a moment ago.
-        pushLatestToCloud();
-        // Reset run-through: clear in-app state but keep engineer profile & queue.
+        pushLatestToCloud(); // best-effort retry
         try {
           Object.keys(localStorage).forEach(function (k) {
             if (k.indexOf("citizenGas.") === 0
@@ -225,8 +230,9 @@
               localStorage.removeItem(k);
             }
           });
+          // Clear the fresh-signin flag so they land on sign-in, not jobs.
+          sessionStorage.removeItem("citizenGas.signinFresh");
         } catch (e) {}
-        // Engineer flow ends here — bounce home. They never see the certificate.
         window.location.href = "/";
       });
 
@@ -568,27 +574,128 @@
         });
       }
 
-      // ====== Mark a job complete when the visit is sent to the cloud ======
-      // We piggy-back on the existing pushLatestToCloud success. Track which
-      // job was started, and on a successful POST, DELETE it from the slot.
+      // ====== Job-completion + multi-job continuation ======
+      // After every Send: (1) mark this job complete server-side,
+      // (2) refetch remaining jobs for the slot, (3) either return to
+      // Today's Jobs (more remaining) OR show the end-of-day Sent overlay.
       var lastStartedJobId = null;
       var origStartJob = startJob;
       startJob = function (job) {
         lastStartedJobId = job.id;
         return origStartJob(job);
       };
-      window.addEventListener("citizenGas:queued", function () {
-        // Best-effort: when the engineer hits Send, mark the started job complete.
-        if (!lastStartedJobId) return;
+
+      function markJobCompleteAndContinue() {
         var slotId = "";
         try { slotId = localStorage.getItem(SLOT_KEY_LS) || ""; } catch (e) {}
-        if (!slotId) return;
-        fetch("/api/jobs/complete", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ id: lastStartedJobId, slotId: slotId }),
-        }).catch(function () {});
+        if (!slotId) {
+          // No slot context (engineer used 'Or enter address manually' from
+          // home). Treat as end-of-day.
+          showEndOfDayOverlay();
+          return;
+        }
+        var jobId = lastStartedJobId;
         lastStartedJobId = null;
+
+        // Mark this job complete (best-effort), THEN refetch.
+        var done = jobId
+          ? fetch("/api/jobs/complete", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ id: jobId, slotId: slotId }),
+            }).catch(function () {})
+          : Promise.resolve();
+
+        done.then(function () {
+          return fetchPendingJobs();
+        }).then(function (jobs) {
+          if (jobs && jobs.length) {
+            // More to do — return to Today's Jobs without showing the
+            // 'Sent' overlay. Bounce React to /#/home so the run-through
+            // resets, then re-show the overlay with the updated list.
+            try {
+              location.hash = "#/home";
+              window.dispatchEvent(new HashChangeEvent("hashchange"));
+            } catch (e) {}
+            // Allow the React 'Sent' state on /review to clear; re-show overlay.
+            setTimeout(function () {
+              jobsShownThisSession = false; // allow re-show
+              showJobsOverlay(jobs);
+            }, 350);
+          } else {
+            showEndOfDayOverlay();
+          }
+        });
+      }
+
+      function showEndOfDayOverlay() {
+        // Update the existing #cg-sent-overlay copy for the end-of-day case.
+        try {
+          var h1 = overlay.querySelector("h1");
+          var p = overlay.querySelector("p");
+          if (h1) h1.textContent = "All jobs complete";
+          if (p) p.textContent = "All visits saved. Have a good evening.";
+          if (doneBtn) doneBtn.textContent = "Finish";
+        } catch (e) {}
+        overlay.classList.add("show");
+      }
+
+      window.addEventListener("citizenGas:queued", function () {
+        // Defer slightly so React commits its post-send state first.
+        setTimeout(markJobCompleteAndContinue, 250);
+      });
+
+      // ====== Review-screen UI patches ======
+      // Rewrite the React 'Open mail app' button copy to 'Finish job'.
+      // Hide the 'Open mail app again' retry button — the data is already
+      // safely in our admin queue, the mailto channel is no longer used.
+      function patchReviewScreenUI() {
+        // Pre-send: button-send labelled 'Open mail app' → 'Finish job'.
+        var sendBtn = document.querySelector('[data-testid="button-send"]');
+        if (sendBtn) {
+          // Swap visible text node (the React tree may include an svg icon).
+          var changed = false;
+          for (var i = 0; i < sendBtn.childNodes.length; i++) {
+            var n = sendBtn.childNodes[i];
+            if (n.nodeType === 3 && n.nodeValue && /open mail app/i.test(n.nodeValue)) {
+              n.nodeValue = "Finish job";
+              changed = true;
+            }
+          }
+          // Fallback: if React renders the label inside a span, scan one level.
+          if (!changed) {
+            var spans = sendBtn.querySelectorAll("span, div");
+            for (var j = 0; j < spans.length; j++) {
+              if (/open mail app/i.test(spans[j].textContent || "")) {
+                spans[j].textContent = "Finish job";
+                break;
+              }
+            }
+          }
+        }
+        // Post-send: hide the 'Open mail app again' button — mailto is dead.
+        var retryBtn = document.querySelector('[data-testid="button-reopen-mail"]');
+        if (retryBtn) retryBtn.style.display = "none";
+        // Post-send: hide the 'Start new job' button (we drive flow from our overlay).
+        var newJobBtn = document.querySelector('[data-testid="button-new-job"]');
+        if (newJobBtn) newJobBtn.style.display = "none";
+        // Post-send: replace the 'Mail app opened. Tap send there.' helper text.
+        // It's a small piece of body copy near the buttons. We rewrite any text
+        // node that mentions 'mail app'.
+        var nodes = document.querySelectorAll("p, span, div");
+        for (var k = 0; k < nodes.length; k++) {
+          var el = nodes[k];
+          if (el.children.length) continue;
+          var t = (el.textContent || "").trim();
+          if (/^mail app opened/i.test(t)) {
+            el.textContent = "Saving visit\u2026";
+          }
+        }
+      }
+      var reviewMo = new MutationObserver(patchReviewScreenUI);
+      window.addEventListener("DOMContentLoaded", function () {
+        patchReviewScreenUI();
+        reviewMo.observe(document.body, { childList: true, subtree: true });
       });
 
       // ====== Sign-in interception ======

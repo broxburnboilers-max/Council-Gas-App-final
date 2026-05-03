@@ -177,6 +177,80 @@
       var doneBtn = document.getElementById("cg-sent-done");
 
       // ── Cloud queue: POST visit data to /api/submissions when queued locally ──
+      // The body sent to the admin is SANITISED so the engineer's personal
+      // identifying info (name / Gas Safe Reg / Licence) and the ON-SITE
+      // DOCUMENTATION / MATERIALS USED sections never appear on the
+      // generated gas-safety certificate. The full engineer profile is still
+      // attached separately as `engineer` so the admin can audit who did the
+      // job — it just won't auto-populate cert fields.
+      function sanitizeBodyForCert(rawBody) {
+        if (typeof rawBody !== "string" || !rawBody) return rawBody;
+        var lines = rawBody.split(/\r?\n/);
+        var out = [];
+        // Sections that should be stripped entirely from the cert-bound body.
+        // Each section starts at a heading line and runs until the next blank
+        // line followed by a recognised next section, or until the property
+        // separator '==============================', or until end of input.
+        var STRIP_HEADINGS = [
+          "ON-SITE DOCUMENTATION",
+          "MATERIALS USED"
+        ];
+        // Headings that legitimately follow and end a stripped section.
+        var KNOWN_HEADINGS = [
+          "PROPERTY ", "ACCESS", "ALARMS", "APPLIANCE ", "COOKER ",
+          "FAULTS", "FAULT ", "ON-SITE DOCUMENTATION", "MATERIALS USED"
+        ];
+        function isKnownHeading(t) {
+          var u = t.trim().toUpperCase();
+          for (var i = 0; i < KNOWN_HEADINGS.length; i++) {
+            if (u === KNOWN_HEADINGS[i].trim() ||
+                u.indexOf(KNOWN_HEADINGS[i]) === 0) return true;
+          }
+          return false;
+        }
+        function isStripHeading(t) {
+          var u = t.trim().toUpperCase();
+          for (var i = 0; i < STRIP_HEADINGS.length; i++) {
+            if (u === STRIP_HEADINGS[i]) return true;
+          }
+          return false;
+        }
+        var i = 0;
+        while (i < lines.length) {
+          var L = lines[i];
+          // 1) Drop the top-level `Engineer: ...` line completely.
+          if (/^\s*Engineer\s*:/i.test(L)) { i++; continue; }
+          // 2) Strip ON-SITE DOCUMENTATION / MATERIALS USED sections.
+          if (isStripHeading(L)) {
+            // skip heading + dashed underline + content until
+            // next blank-then-known-heading or property separator.
+            i++;
+            while (i < lines.length) {
+              var ln = lines[i];
+              if (/^=+\s*$/.test(ln.trim())) break; // property separator
+              // peek: blank line followed by another known heading ends section
+              if (ln.trim() === "") {
+                var j = i + 1;
+                while (j < lines.length && lines[j].trim() === "") j++;
+                if (j >= lines.length) { i = j; break; }
+                if (isKnownHeading(lines[j])) {
+                  // don't keep the trailing blank, advance to j
+                  i = j;
+                  break;
+                }
+              }
+              i++;
+            }
+            continue;
+          }
+          out.push(L);
+          i++;
+        }
+        // collapse 3+ consecutive blank lines down to 1
+        var cleaned = out.join("\n").replace(/\n{3,}/g, "\n\n");
+        return cleaned;
+      }
+
       function pushLatestToCloud() {
         try {
           var queue = JSON.parse(localStorage.getItem("citizenGas.queue") || "[]");
@@ -185,12 +259,13 @@
           if (!latest || latest._cloudSent) return;
           var profile = null;
           try { profile = JSON.parse(localStorage.getItem("citizenGas.engineerProfile") || "null"); } catch (e) {}
+          var safeBody = sanitizeBodyForCert(latest.body);
           fetch("/api/submissions", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
               subject: latest.subject,
-              body: latest.body,
+              body: safeBody,
               engineer: profile,
             }),
           }).then(function (r) {

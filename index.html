@@ -1302,62 +1302,167 @@
     }
   }
 
+  // ---- Safari-friendly modal (replaces alert/confirm which can stall on iOS) ----
+  function showStatusModal(opts) {
+    var existing = document.getElementById("cg-modal");
+    if (existing) existing.remove();
+    var wrap = document.createElement("div");
+    wrap.id = "cg-modal";
+    wrap.style.cssText = [
+      "position:fixed","inset:0","z-index:99999","background:rgba(0,0,0,0.6)",
+      "display:flex","align-items:center","justify-content:center","padding:20px",
+      "font:500 14px/1.4 ui-sans-serif,system-ui,sans-serif",
+    ].join(";");
+    var card = document.createElement("div");
+    card.style.cssText = [
+      "background:#fff","color:#1a2330","border-radius:14px","padding:18px 18px 14px",
+      "max-width:380px","width:100%","box-shadow:0 12px 40px rgba(0,0,0,0.4)",
+    ].join(";");
+    var t = document.createElement("div");
+    t.style.cssText = "font-weight:800;font-size:16px;margin-bottom:8px;";
+    t.textContent = opts.title || "";
+    var m = document.createElement("div");
+    m.style.cssText = "font-size:13px;margin-bottom:14px;white-space:pre-wrap;color:#374151;";
+    m.textContent = opts.message || "";
+    var btnRow = document.createElement("div");
+    btnRow.style.cssText = "display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;";
+    (opts.buttons || [{label: "OK"}]).forEach(function (b) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = b.label;
+      btn.style.cssText = [
+        "border:0","border-radius:8px","padding:9px 14px",
+        "font:700 13px/1 inherit","cursor:pointer",
+        b.primary ? "background:#2a52d4;color:#fff;" : "background:#e4e7ee;color:#1a2330;",
+      ].join(";");
+      btn.addEventListener("click", function () {
+        wrap.remove();
+        if (typeof b.onClick === "function") b.onClick();
+      });
+      btnRow.appendChild(btn);
+    });
+    card.appendChild(t);
+    card.appendChild(m);
+    card.appendChild(btnRow);
+    wrap.appendChild(card);
+    document.body.appendChild(wrap);
+  }
+
+  // Strip large data URLs (photos) from a daybook copy. Photos are kept locally
+  // for the admin Photo-PDF flow, but should NOT be in the emailed JSON because:
+  //  - Resend has a 40 MB attachment cap
+  //  - Safari throttles/drops large fetch bodies
+  //  - The admin import only needs the cert text data
+  function daybookForEmail(d) {
+    var copy = JSON.parse(JSON.stringify(d || {}));
+    var stripped = 0;
+    (copy.certs || []).forEach(function (c) {
+      if (Array.isArray(c.photos)) {
+        stripped += c.photos.length;
+        c.photos = [];
+        c._photosStripped = true;
+      }
+    });
+    copy._stripped_photo_count = stripped;
+    return copy;
+  }
+
   async function finishDay() {
     const d = readDaybook();
-    if (!d.certs || !d.certs.length) {
-      if (!d.noAccess || !d.noAccess.length) {
-        alert("Nothing to send yet — finish at least one job first.");
-        return;
-      }
+    const certCount = (d.certs || []).length;
+    const naCount = (d.noAccess || []).length;
+    if (!certCount && !naCount) {
+      showStatusModal({
+        title: "Nothing to send",
+        message: "Finish at least one job first.",
+        buttons: [{ label: "OK", primary: true }],
+      });
+      return;
     }
-    if (!confirm("Send today's daybook to the office?")) return;
 
+    showStatusModal({
+      title: "Send today's daybook?",
+      message: certCount + " cert" + (certCount === 1 ? "" : "s") +
+        (naCount ? ", " + naCount + " no-access" : "") +
+        "\nWill be emailed to broxburnboilers@gmail.com.",
+      buttons: [
+        { label: "Cancel" },
+        { label: "Send", primary: true, onClick: function () { actuallySendDaybook(d); } },
+      ],
+    });
+  }
+
+  async function actuallySendDaybook(d) {
     const dateStamp = d.date || todayStamp();
     const filename = "daybook-" + dateStamp + ".json";
+    const forEmail = daybookForEmail(d);
     const summary = {
       jobCount: (d.certs || []).length,
       noAccessCount: (d.noAccess || []).length,
     };
+    const payload = JSON.stringify({ daybook: forEmail, summary, filename });
+    const sizeKB = Math.round(payload.length / 1024);
 
+    // Show a working spinner-ish modal
+    showStatusModal({
+      title: "Sending…",
+      message: "Uploading " + sizeKB + " KB to the office. Don't close this page.",
+      buttons: [],
+    });
+
+    let httpStatus = 0;
     let resendOk = false;
-    let resendErr = "";
+    let errMsg = "";
+    let bodyText = "";
     try {
       const resp = await fetch("/api/send-daybook", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ daybook: d, summary, filename }),
+        body: payload,
+        // keepalive lets Safari finish the request even if the page is closing
+        keepalive: true,
       });
-      if (resp.ok) {
-        const j = await resp.json().catch(() => ({}));
-        resendOk = !!(j && j.ok);
-      } else {
-        resendErr = "HTTP " + resp.status;
-      }
+      httpStatus = resp.status;
+      bodyText = await resp.text().catch(function () { return ""; });
+      let parsed = null;
+      try { parsed = JSON.parse(bodyText); } catch (e) {}
+      resendOk = resp.ok && parsed && parsed.ok === true;
     } catch (e) {
-      resendErr = e.message || "network";
+      errMsg = (e && e.message) ? e.message : String(e);
     }
 
+    // Always offer the local backup download regardless of outcome.
+    downloadJsonLocally(d, filename);
+
     if (resendOk) {
-      // Offer download as backup, then clear daybook.
-      downloadJsonLocally(d, filename);
-      alert("Sent. A copy was also saved to your device's Downloads.");
       writeDaybook({ date: "", certs: [], noAccess: [] });
       refreshDaybookButton();
+      showStatusModal({
+        title: "Sent \u2713",
+        message: "Daybook emailed to broxburnboilers@gmail.com.\nA copy also saved to Downloads as " + filename + ".",
+        buttons: [{ label: "Done", primary: true }],
+      });
       return;
     }
 
-    // Fallback: download JSON locally + open mailto so user attaches it.
-    downloadJsonLocally(d, filename);
-    const mailto =
-      "mailto:broxburnboilers@gmail.com" +
-      "?subject=" + encodeURIComponent("Citizen Gas Daybook — " + dateStamp) +
-      "&body=" + encodeURIComponent(buildMailtoBody(d, summary, filename));
-    setTimeout(function () { window.location.href = mailto; }, 400);
-    alert(
-      "Saved to Downloads as " + filename + ".\n" +
-      "An email draft will open — attach the downloaded file before sending."
-    );
-    // Don't clear the daybook on fallback path — engineer needs to confirm send.
+    // Failure path — keep the daybook so the engineer can retry.
+    var diag = [
+      "Status: " + (httpStatus || "no response"),
+      "Size: " + sizeKB + " KB",
+      "Error: " + (errMsg || "—"),
+      "Body: " + (bodyText ? bodyText.slice(0, 200) : "—"),
+    ].join("\n");
+    showStatusModal({
+      title: "Email failed",
+      message:
+        "The daybook could NOT be emailed. Your data is safe — nothing was deleted.\n\n" +
+        "A copy was saved to Downloads as " + filename + ".\n\n" +
+        "Diagnostic info (for support):\n" + diag,
+      buttons: [
+        { label: "Close" },
+        { label: "Try again", primary: true, onClick: function () { actuallySendDaybook(d); } },
+      ],
+    });
   }
 
   function buildMailtoBody(d, summary, filename) {

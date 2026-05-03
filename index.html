@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Citizen Gas</title>
+    <meta name="theme-color" content="#18252D" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Architects+Daughter&family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=Fira+Code:wght@300..700&family=Geist+Mono:wght@100..900&family=Geist:wght@100..900&family=IBM+Plex+Mono:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;1,100;1,200;1,300;1,400;1,500;1,600;1,700&family=IBM+Plex+Sans:ital,wght@0,100..700;1,100..700&family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Lora:ital,wght@0,400..700;1,400..700&family=Merriweather:ital,opsz,wght@0,18..144,300..900;1,18..144,300..900&family=Montserrat:ital,wght@0,100..900;1,100..900&family=Open+Sans:ital,wght@0,300..800;1,300..800&family=Outfit:wght@100..900&family=Oxanium:wght@200..800&family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=Plus+Jakarta+Sans:ital,wght@0,200..800;1,200..800&family=Poppins:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&family=Roboto+Mono:ital,wght@0,100..700;1,100..700&family=Roboto:ital,wght@0,100..900;1,100..900&family=Source+Code+Pro:ital,wght@0,200..900;1,200..900&family=Source+Serif+4:ital,opsz,wght@0,8..60,200..900;1,8..60,200..900&family=Space+Grotesk:wght@300..700&family=Space+Mono:ital,wght@0,400;0,700;1,400;1,700&display=swap"
+      rel="stylesheet"
+    />
+    <script type="module" crossorigin src="./assets/index-DuY2PSMh.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-yAhcxWvt.css">
+    <style>
+      #cg-sent-overlay {
+        position: fixed; inset: 0; z-index: 99999;
+        background: #18252D;
+        color: #f5f5f5;
+        display: none; flex-direction: column; align-items: center; justify-content: center;
+        font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+        text-align: center; padding: 24px;
+      }
+      #cg-sent-overlay.show { display: flex; }
+      #cg-sent-overlay .tick {
+        width: 96px; height: 96px; border-radius: 50%;
+        background: #F2682A;
+        display: flex; align-items: center; justify-content: center;
+        margin-bottom: 24px;
+        box-shadow: 0 8px 32px rgba(242,104,42,0.35);
+      }
+      #cg-sent-overlay .tick svg { width: 56px; height: 56px; stroke: #fff; stroke-width: 4; fill: none; }
+      #cg-sent-overlay h1 { font-size: 28px; font-weight: 800; margin: 0 0 8px; }
+      #cg-sent-overlay p { font-size: 16px; color: #b8c2c8; margin: 0 0 32px; max-width: 320px; line-height: 1.5; }
+      #cg-sent-overlay button {
+        background: #F2682A; color: #fff; border: 0;
+        padding: 14px 36px; border-radius: 12px; font-size: 16px; font-weight: 700;
+        cursor: pointer; min-width: 180px;
+      }
+      #cg-sent-overlay button:active { transform: scale(0.98); }
+
+      /* Admin button — fixed in the bottom-right of every post-sign-in screen */
+      #cg-admin-btn {
+        position: fixed;
+        right: 16px;
+        bottom: 16px;
+        z-index: 9998;
+        background: rgba(242,104,42,0.95);
+        color: #fff;
+        border: 0;
+        border-radius: 999px;
+        padding: 10px 18px;
+        font: 700 13px/1 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+        cursor: pointer;
+        display: none; /* shown by JS once engineer is signed in */
+      }
+      #cg-admin-btn:active { transform: scale(0.97); }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <!-- Admin shortcut to dashboard (only visible after engineer sign-in) -->
+    <button id="cg-admin-btn" type="button" aria-label="Open admin dashboard">Admin</button>
+
+    <!-- Sent confirmation overlay (engineer's end-of-flow) -->
+    <div id="cg-sent-overlay" role="dialog" aria-live="polite">
+      <div class="tick">
+        <svg viewBox="0 0 24 24"><polyline points="4,12 10,18 20,7" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      </div>
+      <h1>Sent</h1>
+      <p>Visit data has been saved. Thank you.</p>
+      <button id="cg-sent-done" type="button">Done</button>
+    </div>
+
+    <script>
+    (function () {
+      var overlay = document.getElementById("cg-sent-overlay");
+      var doneBtn = document.getElementById("cg-sent-done");
+
+      window.addEventListener("citizenGas:queued", function () {
+        overlay.classList.add("show");
+      });
+
+      doneBtn.addEventListener("click", function () {
+        overlay.classList.remove("show");
+        // Reset run-through: clear in-app state but keep engineer profile & queue.
+        try {
+          Object.keys(localStorage).forEach(function (k) {
+            if (k.indexOf("citizenGas.") === 0
+              && k !== "citizenGas.engineerProfile"
+              && k !== "citizenGas.queue") {
+              localStorage.removeItem(k);
+            }
+          });
+        } catch (e) {}
+        // Send the engineer to the dashboard so the queued visit is auto-imported
+        // into Records → Gas Safety Certificates → today's date subfolder.
+        try {
+          var queue = JSON.parse(localStorage.getItem("citizenGas.queue") || "[]");
+          if (queue && queue.length > 0) {
+            window.location.href = "/dashboard/?admin=1";
+            return;
+          }
+        } catch (e) {}
+        // No queued work — just bounce home.
+        window.location.href = "/";
+      });
+
+      // ── Admin button → dashboard (visible only after engineer sign-in) ──
+      var adminBtn = document.getElementById("cg-admin-btn");
+
+      adminBtn.addEventListener("click", function () {
+        // Plain navigation — dashboard handles password gate normally.
+        // Queue (if any) will be processed inside the dashboard via a button.
+        window.location.href = "/dashboard/";
+      });
+
+      function isSignedIn() {
+        try {
+          var raw = localStorage.getItem("citizenGas.engineerProfile");
+          if (!raw) return false;
+          var p = JSON.parse(raw);
+          // Treat any populated profile as "signed in".
+          return !!(p && (p.fullName || p.gasSafeRegNo || p.licenceNo));
+        } catch (e) { return false; }
+      }
+
+      function refreshAdminBtn() {
+        adminBtn.style.display = isSignedIn() ? "inline-flex" : "none";
+      }
+
+      window.addEventListener("DOMContentLoaded", refreshAdminBtn);
+      // Re-evaluate whenever the React app updates the DOM (covers sign-in completion).
+      var adminMo = new MutationObserver(refreshAdminBtn);
+      window.addEventListener("DOMContentLoaded", function () {
+        adminMo.observe(document.body, { childList: true, subtree: true });
+      });
+      // Also listen for storage changes from other tabs.
+      window.addEventListener("storage", refreshAdminBtn);
+    })();
+    </script>
+  </body>
+</html>

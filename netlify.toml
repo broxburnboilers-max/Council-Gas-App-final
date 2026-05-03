@@ -1,0 +1,15 @@
+[build]
+  command = ""
+  publish = "."
+
+# Gas Safe dashboard SPA — preserve hash, serve dashboard index for any /dashboard path
+[[redirects]]
+  from = "/dashboard/*"
+  to = "/dashboard/index.html"
+  status = 200
+
+# Citizen Gas SPA fallback — serve root index.html for any unknown route
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

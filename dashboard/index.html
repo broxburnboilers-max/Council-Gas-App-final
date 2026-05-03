@@ -1,0 +1,915 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#18252D" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>Citizen Gas — Records</title>
+
+    <style>
+      :root {
+        --cg-bg: #18252D;
+        --cg-card: #1f2f38;
+        --cg-card-border: #2a3d47;
+        --cg-text: #f5f5f5;
+        --cg-muted: #b8c2c8;
+        --cg-primary: #F2682A;
+      }
+      html, body { background: var(--cg-bg) !important; color: var(--cg-text); margin: 0; min-height: 100%; }
+      body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+      header, [style*="#2a52d4"] { background: var(--cg-bg) !important; background-image: none !important; }
+      #root > div { background: var(--cg-bg) !important; }
+      #root [style*="background:#fff"]:not(textarea):not(input):not(select),
+      #root [style*="background: #fff"]:not(textarea):not(input):not(select),
+      #root [style*="background:#ffffff"]:not(textarea):not(input):not(select),
+      #root [style*="background: #ffffff"]:not(textarea):not(input):not(select),
+      #root [style*="background: rgb(255, 255, 255)"]:not(textarea):not(input):not(select),
+      #root [style*="background:rgb(255, 255, 255)"]:not(textarea):not(input):not(select),
+      #root [style*="background-color: rgb(255, 255, 255)"]:not(textarea):not(input):not(select),
+      #root [style*="background-color:rgb(255, 255, 255)"]:not(textarea):not(input):not(select) {
+        background: var(--cg-card) !important;
+        background-color: var(--cg-card) !important;
+        color: var(--cg-text) !important;
+        border-color: var(--cg-card-border) !important;
+      }
+      /* Light gray bottom nav / tab strip — also dark. */
+      #root [style*="rgb(248, 249, 252)"],
+      #root [style*="rgb(245, 245, 245)"]:not(textarea):not(input):not(select),
+      #root [style*="rgb(247, 247, 250)"] {
+        background: #0E1A20 !important;
+        background-color: #0E1A20 !important;
+        border-color: #2a3d47 !important;
+      }
+      /* Light gray border lines (e.g. nav top border rgb(221,221,238)). */
+      #root [style*="rgb(221, 221, 238)"],
+      #root [style*="rgb(229, 231, 235)"],
+      #root [style*="rgb(238, 238, 238)"] {
+        border-color: #2a3d47 !important;
+      }
+      #root [style*="border-radius: 50%"][style*="border"],
+      #root [style*="borderRadius:50%"] { border-color: var(--cg-primary) !important; }
+      #root button[style*="#2a52d4"], #root button[style*="#1a3a8f"], #root button[style*="#1a3bbf"] {
+        background: var(--cg-primary) !important; color:#fff !important; border-color: var(--cg-primary) !important;
+      }
+      #root [style*="color:#111"], #root [style*="color: #111"],
+      #root [style*="color:#222"], #root [style*="color: #222"],
+      #root [style*="color:#333"], #root [style*="color: #333"],
+      #root [style*="color:#444"], #root [style*="color: #444"],
+      #root [style*="color:#555"], #root [style*="color: #555"],
+      #root [style*="color:#666"], #root [style*="color: #666"],
+      #root [style*="color: rgb(17, 17, 17)"], #root [style*="color:rgb(17, 17, 17)"],
+      #root [style*="color: rgb(26, 26, 46)"], #root [style*="color:rgb(26, 26, 46)"],
+      #root [style*="color: rgb(34, 34, 34)"], #root [style*="color:rgb(34, 34, 34)"],
+      #root [style*="color: rgb(51, 51, 51)"], #root [style*="color:rgb(51, 51, 51)"],
+      #root [style*="color: rgb(68, 68, 68)"], #root [style*="color:rgb(68, 68, 68)"],
+      #root [style*="color: rgb(85, 85, 85)"], #root [style*="color:rgb(85, 85, 85)"],
+      #root [style*="color: rgb(102, 102, 102)"], #root [style*="color:rgb(102, 102, 102)"] {
+        color: var(--cg-text) !important;
+      }
+      #root textarea, #root input { background:#0e1a20 !important; color: var(--cg-text) !important; border-color: var(--cg-card-border) !important; }
+
+      /* Stealth mode: hide React app while the splash overlay is showing during queue processing. */
+      body.cg-stealth #root { opacity: 0; pointer-events: none; }
+
+      /* Home-screen tile filter — hide tiles whose label is not "New Job" or "Records".
+         JS adds .cg-hide-tile to each unwanted tile after the dashboard renders.
+         During queue processing we add .cg-show-all-tiles to the body to temporarily reveal them
+         so the auto-clicker can find GSC Email. */
+      .cg-hide-tile { display: none !important; }
+      body.cg-show-all-tiles .cg-hide-tile { display: flex !important; }
+
+      /* === Citizen Gas orange recolor — replace bundle's blue scheme ===
+         Bundle inline-styles use rgb()/rgba() notation. Map blues to orange.
+         Primary  rgb(42, 82, 212)   = #2a52d4  -> #F2682A (cg-primary)
+         Deep     rgb(26, 58, 143)   / rgb(26, 59, 191) -> #C8501C (cg-primary-deep)
+         Pale tint rgba(42, 82, 212, 0.094) -> rgba(242, 104, 42, 0.12) (icon bg)
+         Pale surface rgb(240, 244, 255) -> #FFF4EE  (Import button bg)
+      */
+
+      /* Solid primary blue — default to orange (buttons), but the page header bar
+         (a tall element near the top) is recoloured to the dark bg below so the
+         whole screen reads as one continuous dark surface like the unlock screen. */
+      #root [style*="background: rgb(42, 82, 212)"],
+      #root [style*="background:rgb(42, 82, 212)"],
+      #root [style*="background-color: rgb(42, 82, 212)"],
+      #root [style*="background-color:rgb(42, 82, 212)"] {
+        background: #F2682A !important;
+        background-color: #F2682A !important;
+      }
+      /* Linear-gradient surfaces (page wrapper + page header bar). Bundle uses
+         linear-gradient(...) with the blue palette to paint the full-screen wrapper
+         and the sticky header. Replace with the dark page background. */
+      #root [style*="linear-gradient"][style*="rgb(26, 59, 191)"],
+      #root [style*="linear-gradient"][style*="rgb(42, 82, 212)"],
+      #root [style*="linear-gradient"][style*="rgb(26, 58, 143)"] {
+        background: var(--cg-bg) !important;
+        background-image: none !important;
+        background-color: var(--cg-bg) !important;
+      }
+      /* Solid primary blue — text colour (Import button label, links). */
+      #root [style*="color: rgb(42, 82, 212)"],
+      #root [style*="color:rgb(42, 82, 212)"] {
+        color: #F2682A !important;
+      }
+      /* Solid primary blue — borders (Import button outline, etc.). */
+      #root [style*="solid rgb(42, 82, 212)"],
+      #root [style*="border-color: rgb(42, 82, 212)"],
+      #root [style*="border-color:rgb(42, 82, 212)"] {
+        border-color: #F2682A !important;
+      }
+      /* Pale primary tint (rgba 0.094) used as record-row icon backgrounds. */
+      #root [style*="rgba(42, 82, 212, 0.094)"] {
+        background: rgba(242, 104, 42, 0.12) !important;
+        background-color: rgba(242, 104, 42, 0.12) !important;
+      }
+      /* Deep blue variants used as record-row icon backgrounds. */
+      #root [style*="rgba(26, 58, 143, 0.094)"],
+      #root [style*="rgba(26, 59, 191, 0.094)"] {
+        background: rgba(200, 80, 28, 0.12) !important;
+        background-color: rgba(200, 80, 28, 0.12) !important;
+      }
+      /* Solid deep blue (pressed-state buttons). Skip when used inside a linear-gradient
+         (those are handled by the header / page-wrapper rule below as dark surface). */
+      #root [style*="rgb(26, 58, 143)"]:not([style*="0.094"]):not([style*="linear-gradient"]),
+      #root [style*="rgb(26, 59, 191)"]:not([style*="0.094"]):not([style*="linear-gradient"]) {
+        background: #C8501C !important;
+        background-color: #C8501C !important;
+        border-color: #C8501C !important;
+        color: #C8501C !important;
+      }
+      /* Pale blue surface (Import button bg) — transparent on dark theme so the
+         orange outline + label sit cleanly on the parent card. */
+      #root [style*="background: rgb(240, 244, 255)"],
+      #root [style*="background:rgb(240, 244, 255)"],
+      #root [style*="background-color: rgb(240, 244, 255)"],
+      #root [style*="background-color:rgb(240, 244, 255)"] {
+        background: transparent !important;
+        background-color: transparent !important;
+      }
+      /* SVG icons set via fill/stroke attributes (not inline style).
+         Primary blue variants — map to orange. */
+      #root svg [fill="#2a52d4" i], #root svg[fill="#2a52d4" i],
+      #root svg [stroke="#2a52d4" i], #root svg[stroke="#2a52d4" i] {
+        fill: #F2682A !important;
+        stroke: #F2682A !important;
+      }
+      /* Deep blue variants — map to deep orange. */
+      #root svg [fill="#1a3bbf" i], #root svg[fill="#1a3bbf" i],
+      #root svg [stroke="#1a3bbf" i], #root svg[stroke="#1a3bbf" i],
+      #root svg [fill="#1a3a8f" i], #root svg[fill="#1a3a8f" i],
+      #root svg [stroke="#1a3a8f" i], #root svg[stroke="#1a3a8f" i] {
+        fill: #C8501C !important;
+        stroke: #C8501C !important;
+      }
+
+      /* === Certificate / PDF Preview escape hatch ===
+         When the user is viewing a Gas Safety Certificate (the printable document),
+         we force the certificate body back to its original white sheet + black text
+         look, regardless of any earlier dark-theme overrides. A tiny JS observer
+         below adds `body.cg-on-cert` and tags the document with `cg-cert-doc`. */
+      body.cg-on-cert .cg-cert-doc,
+      body.cg-on-cert .cg-cert-doc div,
+      body.cg-on-cert .cg-cert-doc table,
+      body.cg-on-cert .cg-cert-doc tbody,
+      body.cg-on-cert .cg-cert-doc thead,
+      body.cg-on-cert .cg-cert-doc tr,
+      body.cg-on-cert .cg-cert-doc td,
+      body.cg-on-cert .cg-cert-doc th,
+      body.cg-on-cert .cg-cert-doc p,
+      body.cg-on-cert .cg-cert-doc span,
+      body.cg-on-cert .cg-cert-doc h1,
+      body.cg-on-cert .cg-cert-doc h2,
+      body.cg-on-cert .cg-cert-doc h3,
+      body.cg-on-cert .cg-cert-doc h4 {
+        background-color: #ffffff !important;
+        background-image: none !important;
+        color: #000000 !important;
+      }
+      /* Header rows / total rows in the certificate use an orange band — keep that
+         distinct from the white body cells so the document still reads correctly. */
+      body.cg-on-cert .cg-cert-doc [style*="background:#F2682A"],
+      body.cg-on-cert .cg-cert-doc [style*="background: #F2682A"],
+      body.cg-on-cert .cg-cert-doc [style*="background-color:#F2682A"],
+      body.cg-on-cert .cg-cert-doc [style*="background-color: #F2682A"],
+      body.cg-on-cert .cg-cert-doc [style*="background:#f2682a"],
+      body.cg-on-cert .cg-cert-doc [style*="background: #f2682a"] {
+        background-color: #F2682A !important;
+        color: #ffffff !important;
+      }
+      /* Pale grey label cells (e.g. "Signature", "Print Name") use #f0f0f0. */
+      body.cg-on-cert .cg-cert-doc [style*="background:#f0f0f0"],
+      body.cg-on-cert .cg-cert-doc [style*="background: #f0f0f0"] {
+        background-color: #f0f0f0 !important;
+        color: #000 !important;
+      }
+      /* Page background behind the certificate also goes light so the white sheet
+         doesn't sit on a dark page. */
+      body.cg-on-cert,
+      body.cg-on-cert #root,
+      body.cg-on-cert #root > div {
+        background: #ffffff !important;
+        background-color: #ffffff !important;
+        color: #000 !important;
+      }
+      /* Undo the blue→orange recolor inside the certificate so the bands render in
+         the original blue (the look the user wants back). The bundle paints these
+         bands with rgb(42, 82, 212) inline. */
+      body.cg-on-cert .cg-cert-doc [style*="background: rgb(42, 82, 212)"],
+      body.cg-on-cert .cg-cert-doc [style*="background:rgb(42, 82, 212)"],
+      body.cg-on-cert .cg-cert-doc [style*="background-color: rgb(42, 82, 212)"],
+      body.cg-on-cert .cg-cert-doc [style*="background-color:rgb(42, 82, 212)"] {
+        background: rgb(42, 82, 212) !important;
+        background-color: rgb(42, 82, 212) !important;
+        color: #ffffff !important;
+      }
+      body.cg-on-cert .cg-cert-doc [style*="rgb(26, 58, 143)"],
+      body.cg-on-cert .cg-cert-doc [style*="rgb(26, 59, 191)"] {
+        background: rgb(26, 58, 143) !important;
+        background-color: rgb(26, 58, 143) !important;
+        color: #ffffff !important;
+      }
+    </style>
+
+    <script type="module" crossorigin src="./assets/index-99y8mxxr.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <!-- Splash injected by JS only when queue/prefill is present. -->
+
+    <!-- Records normaliser: every record lives inside a date subfolder (DD Mon YYYY). -->
+    <script>
+    (function () {
+      var MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+      function dateFolderName(d) {
+        return String(d.getDate()).padStart(2,"0") + " " + MONTHS[d.getMonth()] + " " + d.getFullYear();
+      }
+      function isDateFolderName(s) {
+        return /^\d{2}\s(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s\d{4}$/.test(String(s||"").trim());
+      }
+      function recordDate(r) {
+        var iso = r && (r.createdAt || r.inspectionDate || r.certDate);
+        var d = iso ? new Date(iso) : null;
+        if (!d || isNaN(d.getTime())) d = new Date();
+        return d;
+      }
+
+      function normaliseRecords() {
+        var records, folders;
+        try { records = JSON.parse(localStorage.getItem("gsc_records") || "[]"); } catch (e) { records = []; }
+        try { folders = JSON.parse(localStorage.getItem("gsc_folders") || "[]"); } catch (e) { folders = []; }
+        if (!Array.isArray(records) || !Array.isArray(folders)) return;
+
+        // Index existing date folders by name.
+        var byName = {};
+        folders.forEach(function (f) { if (f && isDateFolderName(f.name)) byName[f.name] = f; });
+
+        var changed = false;
+
+        // Make sure every record points to a date folder matching its creation date.
+        records.forEach(function (r) {
+          if (!r) return;
+          var name = dateFolderName(recordDate(r));
+          var folder = byName[name];
+          if (!folder) {
+            folder = { id: "folder_" + Date.now() + "_" + Math.random().toString(36).slice(2,7), name: name };
+            folders.push(folder);
+            byName[name] = folder;
+            changed = true;
+          }
+          if (r.gscFolder !== folder.id) { r.gscFolder = folder.id; changed = true; }
+        });
+
+        // Drop non-date folders entirely.
+        var keep = [], dropped = {};
+        folders.forEach(function (f) {
+          if (f && isDateFolderName(f.name)) keep.push(f);
+          else if (f && f.id) { dropped[f.id] = true; changed = true; }
+        });
+        // Any record that pointed to a dropped folder will already have been
+        // re-assigned above (since we ran the date-folder pass first).
+        // Drop empty date folders too — only keep folders that contain at least one record.
+        var folderHasRecord = {};
+        records.forEach(function (r) { if (r && r.gscFolder) folderHasRecord[r.gscFolder] = true; });
+        keep = keep.filter(function (f) {
+          if (folderHasRecord[f.id]) return true;
+          changed = true;
+          return false;
+        });
+
+        if (changed) {
+          localStorage.setItem("gsc_records", JSON.stringify(records));
+          localStorage.setItem("gsc_folders", JSON.stringify(keep));
+        }
+      }
+
+      // Run once on load, and then re-run whenever the dashboard might have just
+      // created new records (after auto-import, after manual save).
+      window.addEventListener("DOMContentLoaded", normaliseRecords);
+      window.addEventListener("storage", function (ev) {
+        if (ev && (ev.key === "gsc_records" || ev.key === "gsc_folders")) normaliseRecords();
+      });
+      // Lightweight polling so navigation between screens within the same tab also catches changes.
+      var lastRecsLen = -1;
+      setInterval(function () {
+        try {
+          var raw = localStorage.getItem("gsc_records") || "[]";
+          var len = raw.length;
+          if (len !== lastRecsLen) { lastRecsLen = len; normaliseRecords(); }
+        } catch (e) {}
+      }, 1500);
+    })();
+    </script>
+
+    <!-- UI simplification: hide unwanted tiles (home) and unwanted rows (records). -->
+    <script>
+    (function () {
+      // Home-screen tiles: keep only "New Job" and "Records".
+      var HOME_ALLOW = ["new job", "records"];
+      var HOME_KNOWN = ["new job", "records", "email import", "gi email", "gw email",
+                        "gsc email", "bs email", "reports"];
+
+      // Records page rows: keep only "Gas Safety Certificates".
+      // (Transfer Records / Export / Import sit below the row list and stay visible.)
+      var RECORDS_KEEP = ["gas safety certificates"];
+      var RECORDS_KILL = ["reminders due", "boiler service records", "gas works",
+                          "gas isolation", "invoices", "quotes", "account reports",
+                          "yearly reports", "yearly report", "warning notices",
+                          "warning notice"];
+
+      // Climb until we reach the actual row/tile card: an ancestor whose parent has
+      // enough siblings to be a list or a grid (≥5). We must move at least one level
+      // up so we don't return the leaf text node itself.
+      function climbToTile(el) {
+        var cur = el;
+        for (var i = 0; i < 8; i++) {
+          if (!cur.parentElement) break;
+          var pSibs = cur.parentElement.children.length;
+          if (pSibs >= 5 && i > 0) return cur;
+          cur = cur.parentElement;
+        }
+        return cur;
+      }
+
+      // Detect when a Gas Safety Certificate document is on screen and tag its
+      // container so the dark-theme overrides can be reverted just for it.
+      function tagCertificate(root) {
+        var onCert = false;
+        // Find the certificate's title heading.
+        var heads = root.querySelectorAll("div, span, p, h1, h2, h3, h4");
+        for (var i = 0; i < heads.length; i++) {
+          var h = heads[i];
+          if (h.children.length > 0) continue;
+          var ht = (h.textContent || "").trim();
+          if (!ht) continue;
+          if (ht.indexOf("Domestic/Landlord Gas Safety") === 0) {
+            // Climb to the printable document wrapper. The certificate is built
+            // from a stack of <div>s; climb until we reach the largest container
+            // that holds the whole document (ancestor with the certificate header
+            // and the bottom signature row).
+            var doc = h;
+            for (var k = 0; k < 12 && doc.parentElement; k++) {
+              doc = doc.parentElement;
+              // Stop when we hit the page wrapper (#root or body).
+              if (doc === root || doc === document.body) { doc = doc.children[0] || doc; break; }
+            }
+            if (doc && doc !== root && doc !== document.body) {
+              doc.classList.add("cg-cert-doc");
+              onCert = true;
+            }
+            break;
+          }
+        }
+        // Also treat "PDF Preview" pages as cert mode (covers the wrapper too).
+        if (!onCert) {
+          for (var j = 0; j < heads.length; j++) {
+            var hh = heads[j];
+            if (hh.children.length > 0) continue;
+            var tt = (hh.textContent || "").trim();
+            if (tt === "PDF Preview") { onCert = true; break; }
+          }
+        }
+        if (onCert) document.body.classList.add("cg-on-cert");
+        else document.body.classList.remove("cg-on-cert");
+      }
+
+      function applyFilters() {
+        var root = document.getElementById("root");
+        if (!root) return;
+        tagCertificate(root);
+        var labels = root.querySelectorAll("div, span, p, h2, h3, h4");
+        labels.forEach(function (el) {
+          if (el.children.length > 0) return; // leaf text nodes only
+          var t = (el.textContent || "").trim().toLowerCase();
+          if (!t || t.length > 30) return;
+
+          // Home-screen tiles
+          if (HOME_KNOWN.indexOf(t) !== -1) {
+            var tile = climbToTile(el);
+            if (HOME_ALLOW.indexOf(t) !== -1) tile.classList.remove("cg-hide-tile");
+            else tile.classList.add("cg-hide-tile");
+            return;
+          }
+
+          // Records-page rows
+          if (RECORDS_KILL.indexOf(t) !== -1) {
+            climbToTile(el).classList.add("cg-hide-tile");
+            return;
+          }
+          if (RECORDS_KEEP.indexOf(t) !== -1) {
+            climbToTile(el).classList.remove("cg-hide-tile");
+            return;
+          }
+        });
+      }
+
+      var mo = new MutationObserver(function () { applyFilters(); });
+      window.addEventListener("DOMContentLoaded", function () {
+        applyFilters();
+        mo.observe(document.body, { childList: true, subtree: true });
+      });
+    })();
+    </script>
+
+    <script>
+    (function () {
+      var splash = null, msgEl = null;
+      function setMsg(t) { if (msgEl) msgEl.textContent = t; }
+      function hideSplashShowApp() {
+        document.body.classList.remove("cg-stealth");
+        document.body.classList.remove("cg-show-all-tiles");
+        if (splash) { splash.style.opacity = "0"; splash.style.pointerEvents = "none"; setTimeout(function(){ splash.remove(); }, 400); }
+      }
+      function showSplash() {
+        if (splash) return;
+        var html =
+          '<div id="cg-splash" style="position:fixed;inset:0;z-index:99999;background:#18252D;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#f5f5f5;transition:opacity .35s ease;">'
+          + '<style>@keyframes cg-spin{to{transform:rotate(360deg);}}</style>'
+          + '<div style="width:48px;height:48px;border-radius:50%;border:3px solid rgba(242,104,42,0.22);border-top-color:#F2682A;animation:cg-spin .9s linear infinite;margin-bottom:18px;"></div>'
+          + '<div style="font-size:20px;font-weight:700;margin-bottom:4px;">Creating certificates…</div>'
+          + '<div id="cg-msg" style="font-size:15px;color:#b8c2c8;">Preparing your data</div>'
+          + '</div>';
+        document.body.insertAdjacentHTML("beforeend", html);
+        document.body.classList.add("cg-stealth");
+        // Reveal hidden tiles so the queue auto-clicker can find GSC Email etc.
+        document.body.classList.add("cg-show-all-tiles");
+        splash = document.getElementById("cg-splash");
+        msgEl  = document.getElementById("cg-msg");
+      }
+
+      // ── Decide intent ─────────────────────────────────────────────────────
+      var queue = [];
+      var legacyPrefill = null;
+      try {
+        var u = new URL(window.location.href);
+        var isAdmin = u.searchParams.get("admin") === "1";
+        var pre = u.searchParams.get("prefill");
+        if (pre) {
+          try { legacyPrefill = decodeURIComponent(escape(atob(decodeURIComponent(pre)))); }
+          catch (e) { try { legacyPrefill = decodeURIComponent(pre); } catch (_e) { legacyPrefill = pre; } }
+        }
+        u.searchParams.delete("prefill");
+        u.searchParams.delete("admin");
+        history.replaceState(null, "", u.pathname + (u.search || "") + (u.hash || ""));
+
+        if (isAdmin) {
+          try { queue = JSON.parse(localStorage.getItem("citizenGas.queue") || "[]"); } catch (e) { queue = []; }
+        } else if (legacyPrefill && legacyPrefill.trim()) {
+          queue = [{ id: "legacy_" + Date.now(), createdAt: Date.now(), body: legacyPrefill }];
+        }
+      } catch (e) { console.error("intent capture failed", e); }
+
+      // No work to do? Let the dashboard render normally with the password gate.
+      if (!queue || queue.length === 0) { return; }
+
+      // We have work — show the splash now.
+      showSplash();
+
+      // ── Translate Citizen Gas body → GSC parser template ──────────────────
+      function getEng(body) { var m = body.match(/^Engineer:\s*(.+)$/m); return m ? m[1].trim() : ""; }
+      function splitProperties(body) {
+        var parts = body.split(/\n\s*PROPERTY\s+\d+\s*\n/gi);
+        if (parts.length <= 1) return [];
+        return parts.slice(1).map(function (chunk) { return chunk.split(/\n=+\n/)[0]; });
+      }
+      function fieldVal(block, key) {
+        var rx = new RegExp("^" + key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s*:\\s*(.*)$", "mi");
+        var m = block.match(rx); return m ? m[1].trim() : "";
+      }
+      function getApplianceBlocks(propBlock) {
+        var out = [];
+        var rx = /APPLIANCE\s+(\d+)\s*\n([\s\S]*?)(?=\n\s*APPLIANCE\s+\d+\s*\n|\nFAULTS\b|\nCOOKER\b|\nALARMS\b|\nALARM\b|\nFAULT\s+\d|\n=+|$)/gi;
+        var m;
+        while ((m = rx.exec(propBlock)) !== null) out.push({ idx: parseInt(m[1], 10), body: m[2] });
+        return out;
+      }
+      function getFaultBlocks(propBlock) {
+        var out = [];
+        var fIdx = propBlock.search(/\nFAULTS\b/i);
+        if (fIdx >= 0) {
+          var faultsSec = propBlock.slice(fIdx).split(/\n=+|\n\s*$/)[0];
+          if (!/None reported/i.test(faultsSec)) {
+            var pieces = faultsSec.split(/\n\s*\n/).slice(1);
+            pieces.forEach(function (p, i) { if (p.trim()) out.push({ idx: i + 1, body: p }); });
+          }
+        }
+        return out;
+      }
+      function buildGSCTemplate(citizenBody) {
+        var props = splitProperties(citizenBody);
+        if (props.length === 0) return citizenBody;
+
+        var lines = [];
+        var engineerName = getEng(citizenBody);
+        // Emit the Engineer line at the very top so the bundle's __pickEng helper
+        // picks the wizard's engineer name instead of the hardcoded fallback.
+        if (engineerName) {
+          lines.push("Engineer: " + engineerName);
+          lines.push("");
+        }
+
+        props.forEach(function (block, pi) {
+          var n = pi + 1;
+          var addr1     = fieldVal(block, "Install Address 1");
+          var addr2     = fieldVal(block, "Install Address 2");
+          var postcode  = fieldVal(block, "Install Postcode");
+          var date      = fieldVal(block, "Date");
+          var coAlarm   = fieldVal(block, "Carbon Monoxide Alarm");
+          var fireAlarm = fieldVal(block, "Fire Alarm");
+
+          var certRef = "GSC-" + (Date.now() + n).toString().slice(-8);
+          var clientName = addr1 || "Customer";
+
+          lines.push("PROPERTY " + n);
+          lines.push("------------------------------");
+          lines.push("Cert Ref: " + certRef);
+          lines.push("Date: " + (date || ""));
+          lines.push("Client Name: " + clientName);
+          lines.push("Client Address 1: " + (addr1 || ""));
+          lines.push("Client Address 2: " + (addr2 || ""));
+          lines.push("Client Address 3: ");
+          lines.push("Client Postcode: " + (postcode || ""));
+          lines.push("Client Tel: ");
+          lines.push("Client Email: ");
+          lines.push("Install Name: " + clientName);
+          lines.push("Install Address 1: " + (addr1 || ""));
+          lines.push("Install Address 2: " + (addr2 || ""));
+          lines.push("Install Address 3: ");
+          lines.push("Install Postcode: " + (postcode || ""));
+          lines.push("Install Tel: ");
+          lines.push("");
+
+          var apps = getApplianceBlocks(block);
+          apps.forEach(function (a, ai) {
+            var ab = a.body;
+            var loc   = fieldVal(ab, "Location");
+            var typ   = fieldVal(ab, "Type");
+            var make  = fieldVal(ab, "Make");
+            var model = fieldVal(ab, "Model");
+            var heat  = fieldVal(ab, "Heat Input");
+            var op    = fieldVal(ab, "Operating Pressure");
+
+            lines.push("APPLIANCE " + (ai + 1));
+            lines.push("Location: " + (loc || ""));
+            lines.push("Type: " + (typ || (ai === 0 ? "Boiler" : (ai === 1 ? "Cooker" : "Gas Fire"))));
+            lines.push("Make: " + (make || ""));
+            lines.push("Model: " + (model || ""));
+            lines.push("Heat Input: " + (heat || "NA"));
+            lines.push("CO Reading: NA");
+            lines.push("CO2 Reading: NA");
+            lines.push("Combustion Analysis Reading: NA");
+            lines.push("Operating Pressure: " + (op || "NA"));
+            lines.push("Flue Type: " + (ai === 0 ? "RS" : "FL"));
+            lines.push("Appliance Inspected: Yes");
+            lines.push("Appliance Serviced: No");
+            lines.push("Appliance Safe to Use: Yes");
+            lines.push("Safety Devices: Yes");
+            lines.push("Ventilation: Pass");
+            lines.push("Flue Visual: Pass");
+            lines.push("Flue Performance: Pass");
+            lines.push("Landlords Appliance: " + (ai === 0 ? "Yes" : "No"));
+            lines.push("");
+          });
+
+          var faults = getFaultBlocks(block);
+          faults.forEach(function (f, fi) {
+            var fb = f.body;
+            var details = fieldVal(fb, "Fault") || fb.split("\n").filter(function(x){return x.trim();}).slice(0,1).join(" ");
+            var remedial = fieldVal(fb, "Remedial") || "";
+            var warning  = fieldVal(fb, "Warning Notice Fixed") || "No";
+            lines.push("FAULT " + (fi + 1));
+            lines.push("Fault Details: " + details);
+            lines.push("Remedial Work: " + remedial);
+            lines.push("Warning Notice Fixed: " + warning);
+            lines.push("");
+          });
+
+          if (coAlarm)   lines.push("Carbon Monoxide Alarm: " + coAlarm);
+          if (fireAlarm) lines.push("Fire Alarm: " + fireAlarm);
+          lines.push("");
+        });
+
+        lines.push("END OF JOB");
+        return lines.join("\n");
+      }
+      function dateFolderName(d) {
+        var dd = String(d.getDate()).padStart(2, "0");
+        var months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+        return dd + " " + months[d.getMonth()] + " " + d.getFullYear();
+      }
+
+      // Build a per-job translation map keyed by createdAt (for date-folder name)
+      var jobs = queue.map(function (q) {
+        var translated;
+        try { translated = buildGSCTemplate(q.body || ""); }
+        catch (e) { console.error("[adapter] translate failed", e); translated = q.body || ""; }
+        var d = q.createdAt ? new Date(q.createdAt) : new Date();
+        return { id: q.id, createdAt: q.createdAt || Date.now(), translated: translated, folderName: dateFolderName(d) };
+      });
+      console.log("[adapter] queued jobs:", jobs.length);
+
+      // Suppress alert() during auto-flow
+      var _origAlert = window.alert;
+      window.alert = function (msg) { console.log("[adapter] suppressed alert:", msg); };
+      function restoreAlert() { try { window.alert = _origAlert; } catch (e) {} }
+
+      // ── Drive the dashboard ───────────────────────────────────────────────
+      function setReactInputValue(el, value) {
+        var proto = el.tagName === "TEXTAREA" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+        var setter = Object.getOwnPropertyDescriptor(proto, "value").set;
+        setter.call(el, value);
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      function findByText(tag, text) {
+        // Prefer the smallest (leaf-most) matching element so we don't grab outer wrappers.
+        var nodes = document.querySelectorAll(tag);
+        var needle = (text || "").trim();
+        var needleLower = needle.toLowerCase();
+        var exact = [], sub = [];
+        for (var i = 0; i < nodes.length; i++) {
+          var n = nodes[i];
+          // Skip invisible nodes
+          try {
+            var rect = n.getBoundingClientRect && n.getBoundingClientRect();
+            if (rect && rect.width === 0 && rect.height === 0) continue;
+          } catch (e) {}
+          var t = ((n.textContent || "") + "").trim();
+          if (!t) continue;
+          var tLower = t.toLowerCase();
+          if (tLower === needleLower) exact.push(n);
+          else if (tLower.indexOf(needleLower) >= 0) sub.push(n);
+        }
+        function byShortest(a, b) {
+          return (a.textContent || "").length - (b.textContent || "").length;
+        }
+        if (exact.length) { exact.sort(byShortest); return exact[0]; }
+        if (sub.length) { sub.sort(byShortest); return sub[0]; }
+        return null;
+      }
+      function climbToClickable(el) {
+        var c = el;
+        // First pass: prefer real buttons / role=button / explicit onclick.
+        for (var i = 0; i < 8 && c; i++) {
+          if (c.tagName === "BUTTON" || c.onclick || (c.getAttribute && c.getAttribute("role") === "button")) return c;
+          c = c.parentElement;
+        }
+        // Second pass: fall back to the nearest ancestor with cursor:pointer (React tile handlers).
+        c = el;
+        for (var j = 0; j < 8 && c; j++) {
+          try {
+            if (c.nodeType === 1 && getComputedStyle(c).cursor === "pointer") return c;
+          } catch (e) {}
+          c = c.parentElement;
+        }
+        return el;
+      }
+      function snapshotRecordIds() {
+        try {
+          var arr = JSON.parse(localStorage.getItem("gsc_records") || "[]");
+          var ids = {};
+          arr.forEach(function (r) { ids[r.savedAt || r.id || JSON.stringify(r).slice(0,80)] = true; });
+          return ids;
+        } catch (e) { return {}; }
+      }
+      // Read the engineer profile saved by the wizard (citizenGas.engineerProfile)
+      // so we can stamp the real engineer details onto each new certificate record.
+      function readEngineerProfile() {
+        try {
+          var p = JSON.parse(localStorage.getItem("citizenGas.engineerProfile") || "{}");
+          return {
+            fullName: (p.fullName || "").trim(),
+            gasSafeRegNo: (p.gasSafeRegNo || "").trim(),
+            licenceNo: (p.licenceNo || "").trim()
+          };
+        } catch (e) { return { fullName: "", gasSafeRegNo: "", licenceNo: "" }; }
+      }
+
+      function tagNewRecordsIntoFolder(beforeIds, folderName) {
+        try {
+          var records = JSON.parse(localStorage.getItem("gsc_records") || "[]");
+          var folders = JSON.parse(localStorage.getItem("gsc_folders") || "[]");
+          var existing = folders.find(function (f) { return f && f.name === folderName; });
+          var folderId = existing ? existing.id : ("f_" + Date.now());
+          if (!existing) { folders.push({ id: folderId, name: folderName }); localStorage.setItem("gsc_folders", JSON.stringify(folders)); }
+          var prof = readEngineerProfile();
+          var changed = false;
+          records.forEach(function (r) {
+            var key = r.savedAt || r.id || JSON.stringify(r).slice(0,80);
+            if (!beforeIds[key]) {
+              if (!r.gscFolder) { r.gscFolder = folderId; changed = true; }
+              // Stamp the wizard's engineer details onto the new record so the
+              // certificate shows them instead of the bundle's hardcoded fallbacks.
+              if (prof.fullName) {
+                if (r.signerName !== prof.fullName) { r.signerName = prof.fullName; changed = true; }
+                if (r.engineerName !== prof.fullName) { r.engineerName = prof.fullName; changed = true; }
+                if (r.issuedBy !== prof.fullName) { r.issuedBy = prof.fullName; changed = true; }
+              }
+              if (prof.gasSafeRegNo) {
+                if (r.gasSafeNo !== prof.gasSafeRegNo) { r.gasSafeNo = prof.gasSafeRegNo; changed = true; }
+              }
+              if (prof.licenceNo) {
+                if (r.engineerId !== prof.licenceNo) { r.engineerId = prof.licenceNo; changed = true; }
+              }
+            }
+          });
+          if (changed) localStorage.setItem("gsc_records", JSON.stringify(records));
+        } catch (e) { console.error("[adapter] folder tag failed", e); }
+      }
+
+      var BUDGET_MS = 60000 + jobs.length * 30000; // generous per-job budget
+      var startedAt = Date.now();
+      var jobIdx = 0;
+      var phase = "wait-unlock";
+      var beforeIds = null;
+
+      function nextJob() {
+        jobIdx++;
+        if (jobIdx >= jobs.length) {
+          // Done with all jobs
+          // Clear queue
+          try { localStorage.removeItem("citizenGas.queue"); } catch (e) {}
+          phase = "go-records";
+          return setTimeout(tick, 300);
+        }
+        // Go back to home, then GSC Email again for next job
+        var back = findByText("button", "Back") || findByText("button", "Home")
+                || document.querySelector('button[aria-label="Back"]');
+        if (back) climbToClickable(back).click();
+        beforeIds = snapshotRecordIds();
+        phase = "wait-home";
+        setTimeout(tick, 400);
+      }
+
+      function tick() {
+        if (Date.now() - startedAt > BUDGET_MS) {
+          restoreAlert();
+          hideSplashShowApp();
+          return;
+        }
+
+        if (phase === "wait-unlock") {
+          var pwd = document.querySelector('input[type="password"]');
+          if (pwd) {
+            // Auto-unlock: dashboard accepts any non-empty password.
+            // Fill it and submit so the user doesn't have to type anything.
+            try {
+              setReactInputValue(pwd, "x");
+              setMsg("Unlocking…");
+              // Try Enter key first (most React password forms submit on Enter).
+              pwd.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+              pwd.dispatchEvent(new KeyboardEvent("keypress", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+              pwd.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+              // Also try clicking the nearest submit button as fallback.
+              setTimeout(function () {
+                if (!document.querySelector('input[type="password"]')) return; // already unlocked
+                var form = pwd.closest && pwd.closest("form");
+                if (form) {
+                  var sb = form.querySelector('button[type="submit"], button');
+                  if (sb) { sb.click(); return; }
+                  try { form.requestSubmit ? form.requestSubmit() : form.submit(); return; } catch (e) {}
+                }
+                // No form — find any visible button on screen (Unlock / Continue / Submit).
+                var btns = Array.from(document.querySelectorAll("button"));
+                for (var i = 0; i < btns.length; i++) {
+                  var b = btns[i];
+                  if (b.disabled) continue;
+                  var t = (b.textContent || "").trim().toLowerCase();
+                  if (/unlock|continue|submit|enter|go|sign\s*in|log\s*in/.test(t)) { b.click(); return; }
+                }
+                if (btns.length === 1) btns[0].click();
+              }, 250);
+            } catch (e) { console.error("[adapter] auto-unlock failed", e); }
+            return setTimeout(tick, 600);
+          }
+          document.body.classList.add("cg-stealth");
+          setMsg("Processing " + jobs.length + " visit" + (jobs.length === 1 ? "" : "s"));
+          beforeIds = snapshotRecordIds();
+          phase = "wait-home";
+          return setTimeout(tick, 200);
+        }
+
+        if (phase === "wait-home") {
+          var gscNode = findByText("div", "GSC Email") || findByText("button", "GSC Email") || findByText("span", "GSC Email");
+          if (gscNode) {
+            climbToClickable(gscNode).click();
+            setMsg("Reading visit " + (jobIdx + 1) + " of " + jobs.length);
+            phase = "wait-import-tab";
+          }
+          return setTimeout(tick, 250);
+        }
+
+        if (phase === "wait-import-tab") {
+          var importTab = findByText("button", "Import Reply") || findByText("div", "Import Reply") || findByText("span", "Import Reply");
+          if (importTab) climbToClickable(importTab).click();
+          phase = "wait-textarea";
+          return setTimeout(tick, 250);
+        }
+
+        if (phase === "wait-textarea") {
+          var ta = document.querySelector('textarea');
+          if (ta) {
+            setReactInputValue(ta, jobs[jobIdx].translated);
+            setMsg("Parsing visit " + (jobIdx + 1));
+            phase = "wait-parse";
+          }
+          return setTimeout(tick, 250);
+        }
+
+        if (phase === "wait-parse") {
+          var btn = findByText("button", "Parse Email") || findByText("button", "Parse");
+          if (btn && !btn.disabled) {
+            btn.click();
+            phase = "wait-import-button";
+          }
+          return setTimeout(tick, 300);
+        }
+
+        if (phase === "wait-import-button") {
+          // The real button text is e.g. "✅ Create 1 Gas Safety Certificate".
+          // Match it via a regex sweep over enabled buttons, then fall back to known labels.
+          var imp = null;
+          var allBtns = Array.from(document.querySelectorAll("button"));
+          for (var bi = 0; bi < allBtns.length; bi++) {
+            var b = allBtns[bi];
+            if (b.disabled) continue;
+            var bt = (b.innerText || b.textContent || "").trim();
+            if (/create\b.*\bcertif/i.test(bt) || /create\b.*\bgsc/i.test(bt)) { imp = b; break; }
+          }
+          if (!imp) {
+            imp = findByText("button", "Create Certificates")
+               || findByText("button", "Create Certificate")
+               || findByText("button", "Import")
+               || findByText("button", "Save");
+          }
+          if (imp && !imp.disabled) {
+            console.log("[adapter] clicking import button:", (imp.innerText || "").trim().slice(0, 60));
+            imp.click();
+            phase = "wait-records";
+          }
+          return setTimeout(tick, 350);
+        }
+
+        if (phase === "wait-records") {
+          var afterIds = snapshotRecordIds();
+          var added = false;
+          for (var k in afterIds) { if (!beforeIds[k]) { added = true; break; } }
+          if (added) {
+            tagNewRecordsIntoFolder(beforeIds, jobs[jobIdx].folderName);
+            setMsg("Saved to folder " + jobs[jobIdx].folderName);
+            return setTimeout(nextJob, 600);
+          }
+          return setTimeout(tick, 300);
+        }
+
+        if (phase === "go-records") {
+          var ok = findByText("button", "OK") || findByText("button", "Ok") || findByText("button", "Done");
+          if (ok) climbToClickable(ok).click();
+          var back = findByText("button", "Back") || findByText("button", "Home")
+                  || document.querySelector('button[aria-label="Back"]');
+          if (back) climbToClickable(back).click();
+          phase = "wait-records-tile";
+          return setTimeout(tick, 350);
+        }
+
+        if (phase === "wait-records-tile") {
+          var rec = findByText("div", "Records") || findByText("button", "Records") || findByText("span", "Records");
+          if (rec) {
+            climbToClickable(rec).click();
+            phase = "done";
+            restoreAlert();
+            setTimeout(hideSplashShowApp, 250);
+            return;
+          }
+          if (Date.now() - startedAt > BUDGET_MS - 5000) { hideSplashShowApp(); return; }
+          return setTimeout(tick, 250);
+        }
+      }
+
+      window.addEventListener("DOMContentLoaded", function () { setTimeout(tick, 350); });
+      setTimeout(hideSplashShowApp, BUDGET_MS + 1000);
+    })();
+    </script>
+  </body>
+</html>

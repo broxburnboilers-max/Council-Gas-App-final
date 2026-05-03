@@ -88,14 +88,23 @@
       #cg-jobs-overlay .job .addr { font-size: 15px; font-weight: 700; line-height: 1.4; }
       #cg-jobs-overlay .job .pcode { font-size: 13px; color: #F2682A; font-weight: 700; margin-top: 4px; letter-spacing: 0.04em; }
       #cg-jobs-overlay .empty { color: rgba(255,255,255,0.6); font-size: 14px; padding: 32px 0; text-align: center; }
+      /* Match the React app's Continue button exactly. */
       #cg-jobs-overlay .skip {
-        position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
-        background: transparent; color: rgba(255,255,255,0.6);
-        border: 1px solid rgba(255,255,255,0.25);
-        border-radius: 999px; padding: 10px 22px;
-        font: 700 12px/1 inherit; letter-spacing: 0.06em; text-transform: uppercase;
+        display: block;
+        width: 100%;
+        margin: 24px 0 0;
+        padding: 8px 16px;
+        background: linear-gradient(135deg, #FFB347 0%, #FF6B35 50%, #E8408F 100%);
+        color: #fff;
+        border: 0;
+        border-radius: 6px;
+        font: 500 14px/1.4 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+        letter-spacing: normal;
+        text-transform: none;
         cursor: pointer;
+        min-height: 36px;
       }
+      #cg-jobs-overlay .skip:active { transform: scale(0.98); }
 
       /* Admin button — fixed in the bottom-right of every post-sign-in screen */
       #cg-admin-btn {
@@ -138,7 +147,7 @@
       </div>
       <p class="lede">Tap a property below to start the visit. The address will be filled in automatically.</p>
       <div class="joblist" id="cg-jobs-list"></div>
-      <button class="skip" id="cg-jobs-skip" type="button">Or enter address manually</button>
+      <button class="skip" id="cg-jobs-skip" type="button">Enter address manually</button>
     </div>
 
     <!-- Admin shortcut to dashboard (only visible after engineer sign-in) -->

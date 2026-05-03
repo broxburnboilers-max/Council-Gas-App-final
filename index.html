@@ -1291,14 +1291,21 @@
     const btn = document.getElementById("cg-daybook-btn");
     if (!btn) return;
     const d = readDaybook();
-    const has = (d.certs && d.certs.length) || (d.noAccess && d.noAccess.length);
+    const c = (d.certs || []).length;
+    const na = (d.noAccess || []).length;
+    const has = c || na;
     const isSignedIn = !!localStorage.getItem("citizenGas.engineerProfile");
-    btn.style.display = (isSignedIn && has) ? "inline-flex" : "none";
+    // Always visible once signed in — even with zero data — so the engineer
+    // never has to wonder where the button is. Tapping when empty just shows
+    // a friendly modal explaining there's nothing to send yet.
+    btn.style.display = isSignedIn ? "inline-flex" : "none";
     if (has) {
-      const c = (d.certs || []).length;
-      const na = (d.noAccess || []).length;
       btn.textContent = "Finish day & email (" + c + " cert" + (c === 1 ? "" : "s") +
         (na ? ", " + na + " no-access" : "") + ")";
+      btn.style.background = "#2a52d4"; // blue: data ready
+    } else {
+      btn.textContent = "Finish day & email (0)";
+      btn.style.background = "#6b7785"; // grey: nothing yet
     }
   }
 

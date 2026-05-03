@@ -394,33 +394,57 @@
         });
       }
 
+      function isOnAddressScreen() {
+        // Council app uses HASH routing: /#/property/address.
+        var h = (location.hash || "").replace(/^#/, "");
+        return h.indexOf("/property/address") === 0
+            || location.pathname.indexOf("/property/address") === 0;
+      }
+
       function clickStartVisit() {
-        // The Council home screen has a primary CTA on /home. We look for any
-        // <a> or <button> whose text starts with "Start" or contains "visit".
+        // The Council home screen has a primary CTA on /home. The element is a
+        // <div> with onclick (text "Start new job"), not a <button>/<a>. We try
+        // by attribute first, then by text.
         return new Promise(function (resolve) {
-          // Already on /property/address? skip.
-          if (location.pathname.indexOf("/property/address") === 0) return resolve();
-          // Try clicking the home CTA up to 4s in case /home is still mounting.
+          if (isOnAddressScreen()) return resolve();
           var attempts = 0;
           var iv = setInterval(function () {
             attempts++;
-            // Look for a link whose href ends with /property/address.
-            var link = document.querySelector('a[href$="/property/address"]');
+            // (1) Anchor pointing to /property/address (path or hash).
+            var link = document.querySelector('a[href$="/property/address"], a[href$="#/property/address"]');
             if (link) { clearInterval(iv); link.click(); return resolve(); }
-            var candidates = document.querySelectorAll("button, a");
-            for (var i = 0; i < candidates.length; i++) {
-              var t = (candidates[i].textContent || "").trim().toLowerCase();
-              if (t === "start visit" || t === "start" || t.indexOf("start visit") !== -1 || t === "begin" || t.indexOf("new visit") !== -1 || t.indexOf("new property") !== -1) {
-                clearInterval(iv);
-                candidates[i].click();
-                return resolve();
+            // (2) Any element whose visible text is or contains the home CTA.
+            // Council home tile reads "Start new job" (sometimes with a subtitle).
+            var all = document.querySelectorAll("button, a, div, [role=button]");
+            var ctaNeedles = ["start new job", "start visit", "new visit", "new property"];
+            for (var i = 0; i < all.length; i++) {
+              var el = all[i];
+              if (el.children.length > 6) continue; // skip large containers
+              var t = (el.textContent || "").trim().toLowerCase();
+              if (!t) continue;
+              for (var n = 0; n < ctaNeedles.length; n++) {
+                if (t.indexOf(ctaNeedles[n]) !== -1) {
+                  // Climb to nearest ancestor with onclick (the React handler
+                  // is on the wrapper div, not the inner span).
+                  var target = el;
+                  for (var d = 0; d < 5 && target; d++) {
+                    if (target.onclick || target.getAttribute("role") === "button") break;
+                    target = target.parentElement;
+                  }
+                  if (!target) target = el;
+                  clearInterval(iv);
+                  target.click();
+                  return resolve();
+                }
               }
             }
-            // Hard fallback: navigate via React Router using the address path.
-            // Only do this after a few attempts so we prefer real button clicks.
-            if (attempts >= 8) {
+            // (3) Hard fallback: hash navigation (Council app uses HashRouter).
+            if (attempts >= 10) {
               clearInterval(iv);
-              try { history.pushState({}, "", "/property/address"); window.dispatchEvent(new PopStateEvent("popstate")); } catch (e) {}
+              try {
+                location.hash = "#/property/address";
+                window.dispatchEvent(new HashChangeEvent("hashchange"));
+              } catch (e) {}
               return resolve();
             }
           }, 200);
@@ -431,11 +455,10 @@
         return new Promise(function (resolve, reject) {
           var start = Date.now();
           var iv = setInterval(function () {
-            // Address screen has 3 inputs with placeholders. We probe by counting
-            // visible text inputs OR by URL.
-            var hasUrl = location.pathname.indexOf("/property/address") === 0;
+            // Address screen has 3 inputs (placeholders: "e.g. 23 Church Road",
+            // "e.g. Coventry", "e.g. CV1 1SD"). We probe by URL + input count.
             var inputs = document.querySelectorAll('input[type="text"], input:not([type])');
-            if (hasUrl && inputs.length >= 3) { clearInterval(iv); return resolve(inputs); }
+            if (isOnAddressScreen() && inputs.length >= 3) { clearInterval(iv); return resolve(inputs); }
             if (Date.now() - start > timeoutMs) { clearInterval(iv); return reject(new Error("timeout")); }
           }, 100);
         });
@@ -472,12 +495,23 @@
           byLabel[labelText] = inp;
         });
         // Heuristic mapping.
-        var a1 = findInputByLabelLike(inputs, ["address 1", "address line 1"]) || inputs[0];
-        var a2 = findInputByLabelLike(inputs, ["address 2", "address line 2"]) || inputs[1];
-        var pc = findInputByLabelLike(inputs, ["postcode", "post code"]) || inputs[2];
+        // Council placeholders: "e.g. 23 Church Road", "e.g. Coventry", "e.g. CV1 1SD".
+        var a1 = findInputByPlaceholderLike(inputs, ["church road", "address line 1", "address 1"]) || inputs[0];
+        var a2 = findInputByPlaceholderLike(inputs, ["coventry", "town", "address 2"]) || inputs[1];
+        var pc = findInputByPlaceholderLike(inputs, ["cv1", "postcode", "post code"]) || inputs[2];
         if (a1) setReactInputValue(a1, job.address1 || "");
         if (a2) setReactInputValue(a2, job.address2 || "");
         if (pc) setReactInputValue(pc, job.postcode || "");
+      }
+
+      function findInputByPlaceholderLike(inputs, needles) {
+        for (var i = 0; i < inputs.length; i++) {
+          var ph = (inputs[i].placeholder || "").toLowerCase();
+          for (var n = 0; n < needles.length; n++) {
+            if (ph.indexOf(needles[n]) !== -1) return inputs[i];
+          }
+        }
+        return null;
       }
 
       function findInputByLabelLike(inputs, needles) {

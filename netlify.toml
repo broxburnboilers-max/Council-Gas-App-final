@@ -12,6 +12,17 @@
   to = "/dashboard/index.html"
   status = 200
 
+# Job assignment admin page (more specific — must come BEFORE /admin/*)
+[[redirects]]
+  from = "/admin/jobs"
+  to = "/admin-jobs/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/admin/jobs/*"
+  to = "/admin-jobs/index.html"
+  status = 200
+
 # Gas Safety admin app SPA
 [[redirects]]
   from = "/admin/*"

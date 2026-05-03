@@ -28,10 +28,21 @@
       @keyframes gs-spin { to { transform: rotate(360deg); } }
       #gs-import-overlay h2 { font-size: 22px; font-weight: 700; margin: 0 0 8px; }
       #gs-import-overlay p { font-size: 14px; color: #cdd5dc; margin: 0; max-width: 320px; line-height: 1.5; }
+      /* Floating link to the Job Assignment page */
+      #gs-jobs-link {
+        position: fixed; right: 16px; bottom: 16px; z-index: 9998;
+        background: #F2682A; color: #fff; border: 0; border-radius: 999px;
+        padding: 12px 20px; font: 800 13px/1 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+        letter-spacing: 0.04em; text-transform: uppercase; cursor: pointer;
+        text-decoration: none; box-shadow: 0 6px 20px rgba(242,104,42,0.45);
+      }
+      #gs-jobs-link:active { transform: scale(0.97); }
     </style>
   </head>
   <body>
     <div id="root"></div>
+
+    <a id="gs-jobs-link" href="/admin/jobs">Assign Jobs</a>
 
     <div id="gs-import-overlay" role="dialog" aria-live="polite">
       <div class="spinner"></div>

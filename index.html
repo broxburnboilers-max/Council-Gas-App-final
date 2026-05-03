@@ -41,6 +41,62 @@
       }
       #cg-sent-overlay button:active { transform: scale(0.98); }
 
+      /* Slot picker chip — top of the sign-in screen */
+      #cg-slot-picker {
+        position: fixed; left: 50%; transform: translateX(-50%);
+        top: 24px; z-index: 9996;
+        background: rgba(255,255,255,0.08); color: #fff;
+        border: 1px solid rgba(255,255,255,0.25);
+        border-radius: 14px; padding: 10px 14px;
+        font: 600 13px/1 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+        display: none; flex-direction: column; align-items: stretch; gap: 6px;
+        backdrop-filter: blur(10px);
+        min-width: 240px;
+      }
+      #cg-slot-picker label { font-size: 11px; color: rgba(255,255,255,0.6); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; }
+      #cg-slot-picker select {
+        background: rgba(255,255,255,0.95); color: #18252D;
+        border: 0; border-radius: 10px;
+        padding: 10px 12px; font: 600 14px/1 inherit;
+        appearance: none; -webkit-appearance: none;
+      }
+
+      /* Today's Jobs overlay — shown after sign-in if jobs exist */
+      #cg-jobs-overlay {
+        position: fixed; inset: 0; z-index: 99998;
+        background: linear-gradient(160deg, #18252D 0%, #243440 60%, #18252D 100%);
+        color: #fff;
+        display: none; flex-direction: column;
+        font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+        padding: 24px 20px 100px;
+        overflow-y: auto;
+      }
+      #cg-jobs-overlay.show { display: flex; }
+      #cg-jobs-overlay .head { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+      #cg-jobs-overlay .head h1 { font-size: 22px; font-weight: 800; margin: 0; }
+      #cg-jobs-overlay .head .who { font-size: 13px; color: rgba(255,255,255,0.65); margin: 0; }
+      #cg-jobs-overlay .lede { font-size: 14px; color: rgba(255,255,255,0.7); margin: 16px 0 20px; line-height: 1.5; }
+      #cg-jobs-overlay .joblist { display: flex; flex-direction: column; gap: 12px; }
+      #cg-jobs-overlay .job {
+        background: rgba(255,255,255,0.06);
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 14px; padding: 16px 18px;
+        cursor: pointer; transition: transform 0.1s, background 0.15s;
+        text-align: left;
+      }
+      #cg-jobs-overlay .job:active { transform: scale(0.98); background: rgba(255,255,255,0.12); }
+      #cg-jobs-overlay .job .addr { font-size: 15px; font-weight: 700; line-height: 1.4; }
+      #cg-jobs-overlay .job .pcode { font-size: 13px; color: #F2682A; font-weight: 700; margin-top: 4px; letter-spacing: 0.04em; }
+      #cg-jobs-overlay .empty { color: rgba(255,255,255,0.6); font-size: 14px; padding: 32px 0; text-align: center; }
+      #cg-jobs-overlay .skip {
+        position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+        background: transparent; color: rgba(255,255,255,0.6);
+        border: 1px solid rgba(255,255,255,0.25);
+        border-radius: 999px; padding: 10px 22px;
+        font: 700 12px/1 inherit; letter-spacing: 0.06em; text-transform: uppercase;
+        cursor: pointer;
+      }
+
       /* Admin button — fixed in the bottom-right of every post-sign-in screen */
       #cg-admin-btn {
         position: fixed;
@@ -64,6 +120,26 @@
   </head>
   <body>
     <div id="root"></div>
+
+    <!-- Engineer slot picker (only visible on the sign-in screen) -->
+    <div id="cg-slot-picker">
+      <label for="cg-slot-select">Engineer</label>
+      <select id="cg-slot-select"></select>
+    </div>
+
+    <!-- Today's Jobs overlay (shown after sign-in if jobs are assigned) -->
+    <div id="cg-jobs-overlay" role="dialog" aria-live="polite">
+      <div class="head">
+        <span style="font-size:28px">📍</span>
+        <div>
+          <h1>Today's Jobs</h1>
+          <p class="who" id="cg-jobs-who">Welcome.</p>
+        </div>
+      </div>
+      <p class="lede">Tap a property below to start the visit. The address will be filled in automatically.</p>
+      <div class="joblist" id="cg-jobs-list"></div>
+      <button class="skip" id="cg-jobs-skip" type="button">Or enter address manually</button>
+    </div>
 
     <!-- Admin shortcut to dashboard (only visible after engineer sign-in) -->
     <button id="cg-admin-btn" type="button" aria-label="Open admin dashboard">Admin</button>
@@ -196,6 +272,295 @@
         // Sign-in screen Admin chip: shown only when not signed in.
         signinAdmin.style.display = isSignedIn() ? "none" : "inline-flex";
       }
+
+      // ===========================================================
+      // Engineer slot picker + Today's Jobs overlay
+      // ===========================================================
+
+      var SLOT_KEY_LS = "citizenGas.slotId";
+      var slotPickerEl = document.getElementById("cg-slot-picker");
+      var slotSelectEl = document.getElementById("cg-slot-select");
+      var jobsOverlay = document.getElementById("cg-jobs-overlay");
+      var jobsListEl = document.getElementById("cg-jobs-list");
+      var jobsWhoEl = document.getElementById("cg-jobs-who");
+      var jobsSkipBtn = document.getElementById("cg-jobs-skip");
+      var slotsCache = []; // [{slotId, label}]
+
+      function loadSlotsFromCloud() {
+        return fetch("/api/engineers/public", { method: "GET" })
+          .then(function (r) { return r.ok ? r.json() : { slots: [] }; })
+          .then(function (j) {
+            slotsCache = (j && j.slots) || [];
+            renderSlotPickerOptions();
+          })
+          .catch(function () { /* offline — hide picker */ });
+      }
+
+      function renderSlotPickerOptions() {
+        if (!slotsCache.length) return;
+        var saved = "";
+        try { saved = localStorage.getItem(SLOT_KEY_LS) || ""; } catch (e) {}
+        slotSelectEl.innerHTML = "";
+        slotsCache.forEach(function (s) {
+          var opt = document.createElement("option");
+          opt.value = s.slotId;
+          opt.textContent = s.label;
+          if (s.slotId === saved) opt.selected = true;
+          slotSelectEl.appendChild(opt);
+        });
+      }
+
+      slotSelectEl.addEventListener("change", function () {
+        try { localStorage.setItem(SLOT_KEY_LS, slotSelectEl.value); } catch (e) {}
+      });
+
+      // Detect if the sign-in screen is currently rendered. Cheap heuristic: an
+      // input with the engineer-name placeholder is present.
+      function isSignInScreen() {
+        return !!document.querySelector('input[placeholder="e.g. James Smith"]');
+      }
+
+      function refreshSlotPickerVisibility() {
+        if (slotsCache.length && isSignInScreen() && !isSignedIn()) {
+          slotPickerEl.style.display = "flex";
+        } else {
+          slotPickerEl.style.display = "none";
+        }
+      }
+
+      // ====== Today's Jobs after sign-in ======
+
+      // The slot the engineer chose at sign-in is stored under SLOT_KEY_LS.
+      // We fetch that slot's pending jobs and present the overlay.
+      function fetchPendingJobs() {
+        var slotId = "";
+        try { slotId = localStorage.getItem(SLOT_KEY_LS) || ""; } catch (e) {}
+        if (!slotId) return Promise.resolve([]);
+        return fetch("/api/jobs/me?slotId=" + encodeURIComponent(slotId))
+          .then(function (r) { return r.ok ? r.json() : { items: [] }; })
+          .then(function (j) { return (j && j.items) || []; })
+          .catch(function () { return []; });
+      }
+
+      function showJobsOverlay(jobs) {
+        var profile = null;
+        try { profile = JSON.parse(localStorage.getItem("citizenGas.engineerProfile") || "null"); } catch (e) {}
+        var slotLabel = "";
+        try {
+          var slotId = localStorage.getItem(SLOT_KEY_LS) || "";
+          var s = slotsCache.find(function (s) { return s.slotId === slotId; });
+          if (s) slotLabel = s.label;
+        } catch (e) {}
+        var who = profile && profile.fullName ? profile.fullName : (slotLabel || "Engineer");
+        jobsWhoEl.textContent = "Welcome, " + who + ".";
+
+        jobsListEl.innerHTML = "";
+        jobs.forEach(function (j) {
+          var btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "job";
+          var line = [j.address1, j.address2].filter(Boolean).join(", ");
+          btn.innerHTML =
+            '<div class="addr">' + escapeHtml(line) + '</div>' +
+            (j.postcode ? '<div class="pcode">' + escapeHtml(j.postcode) + '</div>' : "");
+          btn.addEventListener("click", function () { startJob(j); });
+          jobsListEl.appendChild(btn);
+        });
+        if (!jobs.length) {
+          jobsListEl.innerHTML = '<div class="empty">No jobs assigned. You can still start a visit manually.</div>';
+        }
+        jobsOverlay.classList.add("show");
+      }
+
+      function hideJobsOverlay() { jobsOverlay.classList.remove("show"); }
+
+      jobsSkipBtn.addEventListener("click", hideJobsOverlay);
+
+      // ====== Pre-fill the address screen from a chosen job ======
+
+      // Stash the chosen job so we can fill the address fields when the
+      // address screen mounts.
+      var pendingJob = null;
+
+      function startJob(job) {
+        pendingJob = job;
+        hideJobsOverlay();
+        // Click "Start visit" / equivalent on /home so the React app navigates
+        // to /property/address. We try several strategies in order.
+        clickStartVisit().then(function () {
+          waitForAddressScreen(8000).then(function () {
+            fillAddressFields(job);
+          }).catch(function () { /* user can fill manually */ });
+        });
+      }
+
+      function clickStartVisit() {
+        // The Council home screen has a primary CTA on /home. We look for any
+        // <a> or <button> whose text starts with "Start" or contains "visit".
+        return new Promise(function (resolve) {
+          // Already on /property/address? skip.
+          if (location.pathname.indexOf("/property/address") === 0) return resolve();
+          // Try clicking the home CTA up to 4s in case /home is still mounting.
+          var attempts = 0;
+          var iv = setInterval(function () {
+            attempts++;
+            // Look for a link whose href ends with /property/address.
+            var link = document.querySelector('a[href$="/property/address"]');
+            if (link) { clearInterval(iv); link.click(); return resolve(); }
+            var candidates = document.querySelectorAll("button, a");
+            for (var i = 0; i < candidates.length; i++) {
+              var t = (candidates[i].textContent || "").trim().toLowerCase();
+              if (t === "start visit" || t === "start" || t.indexOf("start visit") !== -1 || t === "begin" || t.indexOf("new visit") !== -1 || t.indexOf("new property") !== -1) {
+                clearInterval(iv);
+                candidates[i].click();
+                return resolve();
+              }
+            }
+            // Hard fallback: navigate via React Router using the address path.
+            // Only do this after a few attempts so we prefer real button clicks.
+            if (attempts >= 8) {
+              clearInterval(iv);
+              try { history.pushState({}, "", "/property/address"); window.dispatchEvent(new PopStateEvent("popstate")); } catch (e) {}
+              return resolve();
+            }
+          }, 200);
+        });
+      }
+
+      function waitForAddressScreen(timeoutMs) {
+        return new Promise(function (resolve, reject) {
+          var start = Date.now();
+          var iv = setInterval(function () {
+            // Address screen has 3 inputs with placeholders. We probe by counting
+            // visible text inputs OR by URL.
+            var hasUrl = location.pathname.indexOf("/property/address") === 0;
+            var inputs = document.querySelectorAll('input[type="text"], input:not([type])');
+            if (hasUrl && inputs.length >= 3) { clearInterval(iv); return resolve(inputs); }
+            if (Date.now() - start > timeoutMs) { clearInterval(iv); return reject(new Error("timeout")); }
+          }, 100);
+        });
+      }
+
+      function setReactInputValue(el, value) {
+        var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+        setter.call(el, value);
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+
+      function fillAddressFields(job) {
+        // Find the three address inputs by looking for their visible labels above.
+        // The screen typically has Address 1, Address 2 (optional), Postcode.
+        var inputs = document.querySelectorAll('input[type="text"], input:not([type])');
+        if (inputs.length < 3) return;
+        // We don't know exact ordering; map by adjacent label text if possible.
+        var byLabel = {};
+        inputs.forEach(function (inp) {
+          var labelText = "";
+          // Walk up to nearest label container.
+          var p = inp;
+          for (var i = 0; i < 5 && p; i++) {
+            var lab = p.previousElementSibling && p.previousElementSibling.textContent;
+            if (lab && lab.trim()) { labelText = lab.trim().toLowerCase(); break; }
+            // Or a label inside the parent.
+            if (p.parentElement) {
+              var inLabel = p.parentElement.querySelector("label");
+              if (inLabel && inLabel.textContent) { labelText = inLabel.textContent.trim().toLowerCase(); break; }
+            }
+            p = p.parentElement;
+          }
+          byLabel[labelText] = inp;
+        });
+        // Heuristic mapping.
+        var a1 = findInputByLabelLike(inputs, ["address 1", "address line 1"]) || inputs[0];
+        var a2 = findInputByLabelLike(inputs, ["address 2", "address line 2"]) || inputs[1];
+        var pc = findInputByLabelLike(inputs, ["postcode", "post code"]) || inputs[2];
+        if (a1) setReactInputValue(a1, job.address1 || "");
+        if (a2) setReactInputValue(a2, job.address2 || "");
+        if (pc) setReactInputValue(pc, job.postcode || "");
+      }
+
+      function findInputByLabelLike(inputs, needles) {
+        for (var i = 0; i < inputs.length; i++) {
+          var inp = inputs[i];
+          // Climb to common parent and read sibling text.
+          var ctx = inp;
+          for (var depth = 0; depth < 4 && ctx; depth++) {
+            var txt = (ctx.textContent || "").toLowerCase();
+            for (var n = 0; n < needles.length; n++) {
+              if (txt.indexOf(needles[n]) !== -1) return inp;
+            }
+            ctx = ctx.parentElement;
+          }
+        }
+        return null;
+      }
+
+      function escapeHtml(s) {
+        return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+          return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c];
+        });
+      }
+
+      // ====== Mark a job complete when the visit is sent to the cloud ======
+      // We piggy-back on the existing pushLatestToCloud success. Track which
+      // job was started, and on a successful POST, DELETE it from the slot.
+      var lastStartedJobId = null;
+      var origStartJob = startJob;
+      startJob = function (job) {
+        lastStartedJobId = job.id;
+        return origStartJob(job);
+      };
+      window.addEventListener("citizenGas:queued", function () {
+        // Best-effort: when the engineer hits Send, mark the started job complete.
+        if (!lastStartedJobId) return;
+        var slotId = "";
+        try { slotId = localStorage.getItem(SLOT_KEY_LS) || ""; } catch (e) {}
+        if (!slotId) return;
+        fetch("/api/jobs/complete", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ id: lastStartedJobId, slotId: slotId }),
+        }).catch(function () {});
+        lastStartedJobId = null;
+      });
+
+      // ====== Sign-in interception ======
+      // We can't replace the React form, but we can wait until the engineer
+      // submits, then check whether the slot picker had a value and confirm.
+      // A lighter approach: every time the profile changes from absent to
+      // present, fetch jobs and show the overlay (only once per session).
+      var jobsShownThisSession = false;
+      function maybeShowJobsAfterSignIn() {
+        if (!isSignedIn() || jobsShownThisSession) return;
+        // Need to know slotId. If the picker selected one, persist it now.
+        if (slotSelectEl.value) {
+          try { localStorage.setItem(SLOT_KEY_LS, slotSelectEl.value); } catch (e) {}
+        }
+        var slotId = "";
+        try { slotId = localStorage.getItem(SLOT_KEY_LS) || ""; } catch (e) {}
+        if (!slotId) return; // slot wasn't picked — nothing to show
+        jobsShownThisSession = true;
+        fetchPendingJobs().then(function (jobs) {
+          if (jobs.length) showJobsOverlay(jobs);
+        });
+      }
+
+      // Watch the DOM for sign-in/sign-out transitions to:
+      //   1) toggle slot picker visibility
+      //   2) trigger the jobs overlay once profile appears
+      var stateMo = new MutationObserver(function () {
+        refreshSlotPickerVisibility();
+        maybeShowJobsAfterSignIn();
+      });
+
+      window.addEventListener("DOMContentLoaded", function () {
+        loadSlotsFromCloud().then(function () {
+          refreshSlotPickerVisibility();
+          maybeShowJobsAfterSignIn();
+          stateMo.observe(document.body, { childList: true, subtree: true });
+        });
+      });
 
       window.addEventListener("DOMContentLoaded", refreshAdminBtns);
       var adminMo = new MutationObserver(refreshAdminBtns);

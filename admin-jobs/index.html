@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#2a52d4" />
+    <title>Gas Safety – Jobs</title>
+    <style>
+      :root {
+        --primary: #2a52d4;
+        --bg: #18252D;
+        --card: #ffffff;
+        --text: #1a2330;
+        --muted: #6b7785;
+        --border: #e4e7ee;
+        --accent: #F2682A;
+        --good: #15a36e;
+        --bad: #c8334a;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0; padding: 0; min-height: 100vh;
+        font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+        background: linear-gradient(160deg, #1a3bbf 0%, #2a52d4 60%, #1a3bbf 100%);
+        color: var(--text);
+        -webkit-font-smoothing: antialiased;
+      }
+      .wrap { max-width: 720px; margin: 0 auto; padding: 24px 20px 80px; }
+      header {
+        display: flex; align-items: center; justify-content: space-between;
+        color: #fff; padding: 8px 0 24px;
+      }
+      header .brand {
+        display: flex; align-items: center; gap: 12px;
+      }
+      header .brand .flame { font-size: 28px; }
+      header .brand h1 { font-size: 18px; margin: 0; font-weight: 800; }
+      header .brand p { font-size: 12px; margin: 2px 0 0; opacity: 0.75; }
+      header .open-cert {
+        background: rgba(255,255,255,0.18); color: #fff; border: 0;
+        border-radius: 999px; padding: 8px 16px; font: 700 12px/1 inherit;
+        text-decoration: none; cursor: pointer; letter-spacing: 0.04em; text-transform: uppercase;
+      }
+
+      .card {
+        background: var(--card); border-radius: 18px; padding: 24px 22px;
+        box-shadow: 0 12px 40px rgba(0,0,0,0.18);
+        margin-bottom: 18px;
+      }
+      .card h2 {
+        margin: 0 0 14px; font-size: 17px; font-weight: 800; letter-spacing: -0.01em;
+      }
+      .card p.lede {
+        margin: 0 0 18px; color: var(--muted); font-size: 14px; line-height: 1.5;
+      }
+
+      .slot {
+        display: flex; align-items: center; gap: 10px;
+        padding: 10px 0; border-bottom: 1px solid var(--border);
+      }
+      .slot:last-child { border-bottom: none; }
+      .slot .id {
+        font-size: 11px; color: var(--muted);
+        background: #f4f6fa; padding: 4px 8px; border-radius: 6px; font-weight: 700;
+        letter-spacing: 0.05em; text-transform: uppercase;
+      }
+      .slot input[type=text] {
+        flex: 1; padding: 10px 12px; border: 1.5px solid var(--border);
+        border-radius: 10px; font: 500 14px/1.2 inherit; color: var(--text);
+        background: #fff;
+      }
+      .slot input[type=text]:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
+      .slot button {
+        background: var(--primary); color: #fff; border: 0;
+        border-radius: 10px; padding: 10px 16px; font: 700 13px/1 inherit;
+        cursor: pointer;
+      }
+      .slot button:disabled { opacity: 0.5; cursor: not-allowed; }
+      .slot .saved { color: var(--good); font-size: 12px; font-weight: 700; }
+
+      label.field {
+        display: block; font-size: 13px; font-weight: 700; color: var(--text);
+        margin-bottom: 6px; letter-spacing: 0.02em;
+      }
+      select, textarea {
+        width: 100%; border: 1.5px solid var(--border); border-radius: 12px;
+        padding: 12px 14px; font: 500 14px/1.4 inherit; background: #fff; color: var(--text);
+      }
+      select { padding-right: 40px; }
+      textarea { min-height: 160px; resize: vertical; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; }
+      .row + .row { margin-top: 14px; }
+      .send-btn {
+        margin-top: 18px; width: 100%;
+        background: var(--accent); color: #fff; border: 0;
+        border-radius: 14px; padding: 16px; font: 800 15px/1 inherit;
+        cursor: pointer; letter-spacing: 0.04em; text-transform: uppercase;
+      }
+      .send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+      .toast {
+        position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+        background: #1a2330; color: #fff; padding: 12px 20px; border-radius: 999px;
+        font: 600 13px/1 inherit; box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+        opacity: 0; pointer-events: none; transition: opacity 0.2s;
+        z-index: 99999;
+      }
+      .toast.show { opacity: 1; }
+      .toast.error { background: var(--bad); }
+
+      .joblist { margin-top: 18px; }
+      .joblist h3 {
+        font-size: 13px; font-weight: 700; color: var(--muted);
+        margin: 18px 0 8px; text-transform: uppercase; letter-spacing: 0.06em;
+      }
+      .job {
+        display: flex; gap: 10px; align-items: center;
+        padding: 10px 12px; background: #f8fafc; border-radius: 10px; margin-bottom: 6px;
+        font-size: 13px; line-height: 1.4;
+      }
+      .job .pcode { font-weight: 700; color: var(--primary); margin-left: auto; }
+      .job .clear { background: transparent; color: var(--bad); border: 0; cursor: pointer; padding: 4px 8px; font-weight: 700; font-size: 12px; }
+
+      .empty { text-align: center; color: var(--muted); padding: 16px 0; font-size: 13px; }
+
+      a.back {
+        color: rgba(255,255,255,0.75); text-decoration: none;
+        font: 600 12px/1 inherit; letter-spacing: 0.05em; text-transform: uppercase;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <div class="brand">
+          <span class="flame">🔥</span>
+          <div>
+            <h1>Job Assignment</h1>
+            <p>West Lothian Gas Ltd</p>
+          </div>
+        </div>
+        <a href="/admin/" class="open-cert">Certificates →</a>
+      </header>
+
+      <!-- Engineer slots -->
+      <section class="card">
+        <h2>Engineer slots</h2>
+        <p class="lede">Three slots available. Rename a slot once you hire the real engineer — jobs already assigned to that slot will follow the rename automatically.</p>
+        <div id="slots"></div>
+      </section>
+
+      <!-- Assign jobs -->
+      <section class="card">
+        <h2>Assign jobs</h2>
+        <p class="lede">Pick an engineer, paste one address per line, hit Send. The engineer will see the list when they sign in.</p>
+
+        <div class="row">
+          <label class="field" for="assign-slot">Engineer</label>
+          <select id="assign-slot"></select>
+        </div>
+
+        <div class="row">
+          <label class="field" for="assign-addresses">Addresses (one per line)</label>
+          <textarea id="assign-addresses" placeholder="Flat 196 Hewitt Ave, Coventry, CV6 1NL
+97c Almond Tree Avenue, Coventry, CV2 1JX
+19 Valley Road, Coventry, CV2 3JE"></textarea>
+        </div>
+
+        <button id="assign-send" class="send-btn">Send to engineer</button>
+      </section>
+
+      <!-- Existing assigned jobs -->
+      <section class="card">
+        <h2>Currently assigned</h2>
+        <div id="job-summary"></div>
+      </section>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <script>
+    (function () {
+      // Auth gate — must come from the Council sign-in screen's Admin button.
+      try {
+        if (sessionStorage.getItem("gsAdminAuth") !== "1") {
+          window.location.href = "/";
+          return;
+        }
+      } catch (e) {}
+
+      var ADMIN_KEY = "Test";
+      try { ADMIN_KEY = sessionStorage.getItem("gsAdminKey") || ADMIN_KEY; } catch (e) {}
+
+      function api(path, opts) {
+        opts = opts || {};
+        opts.headers = Object.assign({
+          "content-type": "application/json",
+          "x-admin-key": ADMIN_KEY,
+        }, opts.headers || {});
+        return fetch(path, opts).then(function (r) {
+          return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; });
+        });
+      }
+
+      var toastEl = document.getElementById("toast");
+      var toastTimer;
+      function toast(msg, isError) {
+        toastEl.textContent = msg;
+        toastEl.classList.toggle("error", !!isError);
+        toastEl.classList.add("show");
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(function () { toastEl.classList.remove("show"); }, 2200);
+      }
+
+      // ── Render engineer slots ──
+      var slotsEl = document.getElementById("slots");
+      var assignSelect = document.getElementById("assign-slot");
+      var slotsCache = []; // [{slotId, label}]
+
+      function renderSlots() {
+        slotsEl.innerHTML = "";
+        slotsCache.forEach(function (s) {
+          var row = document.createElement("div");
+          row.className = "slot";
+          row.innerHTML =
+            '<span class="id">' + s.slotId.replace("engineer_", "Slot ") + '</span>' +
+            '<input type="text" value="' + escapeHtml(s.label) + '" data-slot="' + s.slotId + '" />' +
+            '<button data-save="' + s.slotId + '">Save</button>';
+          slotsEl.appendChild(row);
+        });
+        slotsEl.querySelectorAll("button[data-save]").forEach(function (btn) {
+          btn.addEventListener("click", function () {
+            var slotId = btn.getAttribute("data-save");
+            var input = slotsEl.querySelector('input[data-slot="' + slotId + '"]');
+            var label = (input.value || "").trim();
+            if (!label) { toast("Name can't be empty", true); return; }
+            btn.disabled = true;
+            api("/api/engineers/rename", {
+              method: "POST",
+              body: JSON.stringify({ slotId: slotId, label: label }),
+            }).then(function (r) {
+              btn.disabled = false;
+              if (!r.ok) { toast("Save failed", true); return; }
+              toast("Saved");
+              loadSlots();
+            }).catch(function () {
+              btn.disabled = false;
+              toast("Network error", true);
+            });
+          });
+        });
+      }
+
+      function renderAssignSelect() {
+        assignSelect.innerHTML = "";
+        slotsCache.forEach(function (s) {
+          var opt = document.createElement("option");
+          opt.value = s.slotId;
+          opt.textContent = s.label;
+          assignSelect.appendChild(opt);
+        });
+      }
+
+      function loadSlots() {
+        return api("/api/engineers", { method: "GET" }).then(function (r) {
+          if (!r.ok) { toast("Couldn't load engineers", true); return; }
+          slotsCache = r.body.slots || [];
+          renderSlots();
+          renderAssignSelect();
+        });
+      }
+
+      // ── Render assigned jobs grouped by slot ──
+      var summaryEl = document.getElementById("job-summary");
+      function renderJobs(jobs) {
+        var bySlot = {};
+        slotsCache.forEach(function (s) { bySlot[s.slotId] = []; });
+        jobs.forEach(function (j) {
+          if (!bySlot[j.slotId]) bySlot[j.slotId] = [];
+          bySlot[j.slotId].push(j);
+        });
+
+        var html = "";
+        slotsCache.forEach(function (s) {
+          var list = bySlot[s.slotId] || [];
+          html += '<div class="joblist">';
+          html += '<h3>' + escapeHtml(s.label) + ' · ' + list.length + ' job' + (list.length === 1 ? '' : 's') + '</h3>';
+          if (list.length === 0) {
+            html += '<div class="empty">No jobs assigned.</div>';
+          } else {
+            list.forEach(function (j) {
+              html += '<div class="job">' +
+                '<span>' + escapeHtml([j.address1, j.address2].filter(Boolean).join(", ")) + '</span>' +
+                '<span class="pcode">' + escapeHtml(j.postcode || "") + '</span>' +
+                '</div>';
+            });
+            html += '<button class="clear" data-clear="' + s.slotId + '">Clear all jobs for this engineer</button>';
+          }
+          html += '</div>';
+        });
+        summaryEl.innerHTML = html;
+        summaryEl.querySelectorAll("button[data-clear]").forEach(function (btn) {
+          btn.addEventListener("click", function () {
+            var slotId = btn.getAttribute("data-clear");
+            if (!confirm("Clear all jobs for this engineer?")) return;
+            api("/api/jobs?slotId=" + encodeURIComponent(slotId), { method: "DELETE" }).then(function (r) {
+              if (!r.ok) { toast("Failed", true); return; }
+              toast("Cleared");
+              loadJobs();
+            });
+          });
+        });
+      }
+
+      function loadJobs() {
+        return api("/api/jobs", { method: "GET" }).then(function (r) {
+          if (!r.ok) { toast("Couldn't load jobs", true); return; }
+          renderJobs(r.body.items || []);
+        });
+      }
+
+      // ── Submit new job assignment ──
+      document.getElementById("assign-send").addEventListener("click", function () {
+        var slotId = assignSelect.value;
+        var raw = document.getElementById("assign-addresses").value || "";
+        var lines = raw.split("\n").map(function (l) { return l.trim(); }).filter(Boolean);
+        if (!lines.length) { toast("Paste at least one address", true); return; }
+        var btn = this;
+        btn.disabled = true;
+        api("/api/jobs", {
+          method: "POST",
+          body: JSON.stringify({ slotId: slotId, addresses: lines }),
+        }).then(function (r) {
+          btn.disabled = false;
+          if (!r.ok) { toast("Failed: " + (r.body.error || r.status), true); return; }
+          toast("Added " + r.body.added + " job" + (r.body.added === 1 ? "" : "s"));
+          document.getElementById("assign-addresses").value = "";
+          loadJobs();
+        }).catch(function () {
+          btn.disabled = false;
+          toast("Network error", true);
+        });
+      });
+
+      function escapeHtml(s) {
+        return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+          return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c];
+        });
+      }
+
+      loadSlots().then(loadJobs);
+    })();
+    </script>
+  </body>
+</html>

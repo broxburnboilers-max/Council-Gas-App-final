@@ -575,17 +575,71 @@
       });
 
       // ====== Sign-in interception ======
-      // We can't replace the React form, but we can wait until the engineer
-      // submits, then check whether the slot picker had a value and confirm.
-      // A lighter approach: every time the profile changes from absent to
-      // present, fetch jobs and show the overlay (only once per session).
+      // The Council React app already shows the sign-in screen on every app
+      // open — even when a profile is saved. We must NOT auto-show the jobs
+      // overlay just because localStorage has a profile; otherwise the engineer
+      // sees Today's Jobs the moment they open the app.
+      //
+      // Correct behaviour:
+      //   1. App opens → sign-in screen visible → if a profile is saved, we
+      //      pre-fill the inputs so the engineer only has to tap Continue.
+      //   2. Engineer taps Continue → React stores profile + advances to /home.
+      //   3. We detect that fresh transition and show the Today's Jobs overlay.
+      //
+      // We use a sessionStorage flag so a hard reload mid-shift behaves
+      // exactly like a fresh app open.
+
+      var SIGNIN_FRESH_KEY = "citizenGas.signinFresh"; // set on Continue click
+
+      function autoFillSignInFromSaved() {
+        // Only on the sign-in screen, only when profile is saved.
+        if (!isSignInScreen()) return;
+        var profile = null;
+        try { profile = JSON.parse(localStorage.getItem("citizenGas.engineerProfile") || "null"); } catch (e) {}
+        if (!profile) return;
+        var nameInput = document.querySelector('input[placeholder="e.g. James Smith"]');
+        var regInput  = document.querySelector('input[placeholder="e.g. 927997"]');
+        var licInput  = document.querySelector('input[placeholder="e.g. 5927846"]');
+        if (nameInput && !nameInput.value && profile.fullName) setReactInputValue(nameInput, profile.fullName);
+        if (regInput && !regInput.value && profile.gasSafeRegNo) setReactInputValue(regInput, profile.gasSafeRegNo);
+        if (licInput && !licInput.value && profile.licenceNo) setReactInputValue(licInput, profile.licenceNo);
+      }
+
+      // Listen for the Continue click on the sign-in screen and flag the
+      // session as "freshly signed in". Use a capturing listener so we run
+      // before React handlers finish (we read flag, React advances).
+      document.addEventListener("click", function (e) {
+        if (!isSignInScreen()) return;
+        var t = e.target;
+        // Walk up to find the nearest button-like element.
+        for (var i = 0; i < 4 && t; i++) {
+          var txt = (t.textContent || "").trim().toLowerCase();
+          if ((t.tagName === "BUTTON" || t.getAttribute("role") === "button") && txt === "continue") {
+            // Persist slot choice from our picker into localStorage.
+            if (slotSelectEl.value) {
+              try { localStorage.setItem(SLOT_KEY_LS, slotSelectEl.value); } catch (err) {}
+            }
+            try { sessionStorage.setItem(SIGNIN_FRESH_KEY, "1"); } catch (err) {}
+            break;
+          }
+          t = t.parentElement;
+        }
+      }, true);
+
       var jobsShownThisSession = false;
       function maybeShowJobsAfterSignIn() {
-        if (!isSignedIn() || jobsShownThisSession) return;
-        // Need to know slotId. If the picker selected one, persist it now.
-        if (slotSelectEl.value) {
-          try { localStorage.setItem(SLOT_KEY_LS, slotSelectEl.value); } catch (e) {}
-        }
+        if (jobsShownThisSession) return;
+        if (!isSignedIn()) return;
+        // Only show if THIS session just completed a Continue click. If the
+        // profile was already saved from a previous session and the user
+        // hasn't tapped Continue yet (we're still on the sign-in screen),
+        // do nothing.
+        var fresh = false;
+        try { fresh = sessionStorage.getItem(SIGNIN_FRESH_KEY) === "1"; } catch (e) {}
+        if (!fresh) return;
+        // Make sure the React app has actually moved off the sign-in screen.
+        if (isSignInScreen()) return;
+
         var slotId = "";
         try { slotId = localStorage.getItem(SLOT_KEY_LS) || ""; } catch (e) {}
         if (!slotId) return; // slot wasn't picked — nothing to show
@@ -597,16 +651,23 @@
 
       // Watch the DOM for sign-in/sign-out transitions to:
       //   1) toggle slot picker visibility
-      //   2) trigger the jobs overlay once profile appears
+      //   2) auto-fill the saved profile if we're on sign-in
+      //   3) trigger the jobs overlay only after a fresh Continue click
       var stateMo = new MutationObserver(function () {
         refreshSlotPickerVisibility();
+        autoFillSignInFromSaved();
         maybeShowJobsAfterSignIn();
       });
 
       window.addEventListener("DOMContentLoaded", function () {
+        // CRITICAL: clear the fresh-signin flag on every cold load. A hard
+        // refresh / app reopen must always start from the sign-in screen.
+        try { sessionStorage.removeItem(SIGNIN_FRESH_KEY); } catch (e) {}
         loadSlotsFromCloud().then(function () {
           refreshSlotPickerVisibility();
-          maybeShowJobsAfterSignIn();
+          autoFillSignInFromSaved();
+          // Don't call maybeShowJobsAfterSignIn here — it would never fire
+          // anyway (no fresh flag), but explicit is better.
           stateMo.observe(document.body, { childList: true, subtree: true });
         });
       });

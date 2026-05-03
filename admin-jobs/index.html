@@ -147,16 +147,24 @@
         color: var(--muted);
         font-size: 12px;
       }
-      .week-day input[type=text] {
+      .week-day textarea.week-paste {
         width: 100%;
-        padding: 8px 10px;
+        padding: 10px 12px;
         border: 1px solid var(--border);
         border-radius: 8px;
-        font: 500 13px/1.3 inherit;
+        font: 500 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
         background: #fff;
         margin-top: 6px;
+        resize: vertical;
+        min-height: 110px;
+        white-space: pre;
       }
-      .week-day input[type=text]:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
+      .week-day textarea.week-paste:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
+      .week-day .week-hint {
+        margin: 6px 2px 0;
+        font-size: 11px;
+        color: var(--muted);
+      }
     </style>
   </head>
   <body>
@@ -369,19 +377,21 @@
           var d = new Date(monday);
           d.setDate(monday.getDate() + i);
           var key = fmtDate(d);
-          var prefill = existingByDate[key] || ["", "", "", ""];
+          var prefill = existingByDate[key] || [];
           var box = document.createElement("div");
           box.className = "week-day";
           var dateLabel = d.toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
-          var inputsHtml = "";
-          for (var k = 0; k < 4; k++) {
-            inputsHtml +=
-              '<input type="text" data-day="' + key + '" data-slot-idx="' + k + '" ' +
-              'placeholder="Address line 1, town, POSTCODE" value="' + escapeHtml(prefill[k] || "") + '" />';
-          }
+          var prefillText = prefill.filter(Boolean).join("\n");
           box.innerHTML =
             '<h4>' + DAY_NAMES[i] + ' <span class="date">' + dateLabel + ' · ' + key + '</span></h4>' +
-            inputsHtml;
+            '<textarea class="week-paste" data-day="' + key + '" rows="4" ' +
+              'placeholder="1 Pass Lane, Broxburn, EH52 1AA' + "\n" +
+              '2 Fault Street, Broxburn, EH52 1BB' + "\n" +
+              '3 Cooker Court, Broxburn, EH52 1CC' + "\n" +
+              '4 Fire Road, Broxburn, EH52 1DD">' +
+              escapeHtml(prefillText) +
+            '</textarea>' +
+            '<p class="week-hint">Paste up to 4 addresses, one per line.</p>';
           weekGrid.appendChild(box);
         }
       }
@@ -415,15 +425,21 @@
         weekSaveBtn.addEventListener("click", function () {
           var slotId = document.getElementById("week-slot").value;
           if (!slotId) { toast("Pick an engineer", true); return; }
-          var inputs = weekGrid.querySelectorAll('input[type=text]');
+          var areas = weekGrid.querySelectorAll('textarea.week-paste');
           var days = {};
-          inputs.forEach(function (inp) {
-            var key = inp.getAttribute("data-day");
-            var v = (inp.value || "").trim();
-            if (!v) return;
-            if (!days[key]) days[key] = [];
-            days[key].push(v);
+          var tooMany = false;
+          areas.forEach(function (ta) {
+            var key = ta.getAttribute("data-day");
+            var lines = (ta.value || "")
+              .split(/\r?\n/)
+              .map(function (l) { return l.trim(); })
+              .filter(Boolean);
+            if (lines.length > 4) tooMany = true;
+            if (lines.length) days[key] = lines.slice(0, 4);
           });
+          if (tooMany) {
+            if (!confirm("One or more days has more than 4 addresses. Only the first 4 of each day will be saved. Continue?")) return;
+          }
           if (!Object.keys(days).length) {
             if (!confirm("No addresses entered. Save an empty week (clears this engineer's upcoming jobs)?")) return;
           }

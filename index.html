@@ -463,7 +463,13 @@
           jobsListEl.appendChild(btn);
         });
         if (!jobs.length) {
-          jobsListEl.innerHTML = '<div class="empty">No jobs assigned. You can still start a visit manually.</div>';
+          // Friendly message keyed off the day-of-week so weekends read naturally.
+          var dow = new Date().getDay();
+          var weekend = (dow === 0 || dow === 6);
+          var msg = weekend
+            ? "No jobs today — enjoy your weekend. Tap below to start a visit manually if needed."
+            : "No jobs scheduled for today. Tap below to start a visit manually if needed.";
+          jobsListEl.innerHTML = '<div class="empty">' + msg + '</div>';
         }
         jobsOverlay.classList.add("show");
       }

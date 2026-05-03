@@ -59,6 +59,15 @@ function parseAddress(line) {
   };
 }
 
+// Returns YYYY-MM-DD in Europe/London timezone (where engineers + admin live).
+// Using en-CA locale because it formats as YYYY-MM-DD natively.
+function londonToday() {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Europe/London" });
+}
+function isValidDate(s) {
+  return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
+}
+
 async function loadLabels(store) {
   const saved = (await store.get(KEY_LABELS, { type: "json" })) || {};
   // Always return all 3 slots, falling back to defaults for any slot not yet renamed.
@@ -90,12 +99,24 @@ export default async (req) => {
     });
   }
 
-  // GET /api/jobs/me?slotId=engineer_1
+  // GET /api/jobs/me?slotId=engineer_1[&date=YYYY-MM-DD][&all=1]
+  // Default: returns ONLY today's pending jobs (Europe/London) for that slot.
+  // ?date=YYYY-MM-DD overrides today (used for testing).
+  // ?all=1 returns the entire week's pending jobs (used by admin/debug).
   if (path.endsWith("/jobs/me") && method === "GET") {
     const slotId = (url.searchParams.get("slotId") || "").trim();
     if (!SLOTS.includes(slotId)) return res(400, { error: "invalid slotId" });
     const jobs = (await store.get(KEY_JOBS, { type: "json" })) || [];
-    return res(200, { items: jobs.filter(j => j.slotId === slotId) });
+    const wantAll = url.searchParams.get("all") === "1";
+    const dateParam = (url.searchParams.get("date") || "").trim();
+    const today = isValidDate(dateParam) ? dateParam : londonToday();
+    const mine = jobs.filter(j => j.slotId === slotId);
+    const items = wantAll
+      ? mine
+      // Match jobs whose dueDate is today, OR jobs with no dueDate at all
+      // (legacy/manual assignments — keep visible until cleared).
+      : mine.filter(j => !j.dueDate || j.dueDate === today);
+    return res(200, { items, today, slotId });
   }
 
   // POST /api/jobs/complete  {id, slotId}
@@ -144,17 +165,21 @@ export default async (req) => {
     return res(200, { items: jobs });
   }
 
-  // POST /api/jobs  {slotId, addresses[]}
+  // POST /api/jobs  {slotId, addresses[], dueDate?}
+  // Each address may be a string OR an object {address1, address2, postcode, dueDate}.
+  // If a top-level dueDate is provided, all addresses inherit it unless they set their own.
   if (path.endsWith("/jobs") && method === "POST") {
     let payload;
     try { payload = await req.json(); } catch { return res(400, { error: "invalid json" }); }
     if (!payload || !SLOTS.includes(payload.slotId)) return res(400, { error: "invalid slotId" });
     const addresses = Array.isArray(payload.addresses) ? payload.addresses : [];
+    const defaultDue = isValidDate(payload.dueDate) ? payload.dueDate : null;
     const list = (await store.get(KEY_JOBS, { type: "json" })) || [];
     const added = [];
     for (const a of addresses) {
       const parsed = typeof a === "string" ? parseAddress(a) : a;
       if (!parsed || !parsed.address1) continue;
+      const itemDue = isValidDate(parsed.dueDate) ? parsed.dueDate : defaultDue;
       const item = {
         id: "j_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8),
         slotId: payload.slotId,
@@ -162,6 +187,7 @@ export default async (req) => {
         address2: parsed.address2 || "",
         postcode: parsed.postcode || "",
         raw: parsed.raw || "",
+        dueDate: itemDue || null,
         createdAt: new Date().toISOString(),
       };
       list.push(item);
@@ -169,6 +195,46 @@ export default async (req) => {
     }
     await store.setJSON(KEY_JOBS, list);
     return res(200, { ok: true, added: added.length, items: added });
+  }
+
+  // POST /api/jobs/week  {slotId, days: {"YYYY-MM-DD": [addr,addr,addr,addr]}}
+  // Atomic weekly replace: clears any future-dated (or undated) jobs for that slot,
+  // then inserts the new schedule. Past jobs (dueDate < today) are preserved as history.
+  if (path.endsWith("/jobs/week") && method === "POST") {
+    let payload;
+    try { payload = await req.json(); } catch { return res(400, { error: "invalid json" }); }
+    if (!payload || !SLOTS.includes(payload.slotId)) return res(400, { error: "invalid slotId" });
+    const days = payload.days || {};
+    const today = londonToday();
+    const list = (await store.get(KEY_JOBS, { type: "json" })) || [];
+    // Drop existing jobs for this slot whose dueDate is today or later (or missing).
+    const kept = list.filter(j => {
+      if (j.slotId !== payload.slotId) return true;
+      if (!j.dueDate) return false; // drop legacy undated for this slot
+      return j.dueDate < today;
+    });
+    let added = 0;
+    for (const dateKey of Object.keys(days)) {
+      if (!isValidDate(dateKey)) continue;
+      const addresses = Array.isArray(days[dateKey]) ? days[dateKey] : [];
+      for (const a of addresses) {
+        const parsed = typeof a === "string" ? parseAddress(a) : a;
+        if (!parsed || !parsed.address1) continue;
+        kept.push({
+          id: "j_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8),
+          slotId: payload.slotId,
+          address1: parsed.address1 || "",
+          address2: parsed.address2 || "",
+          postcode: parsed.postcode || "",
+          raw: parsed.raw || "",
+          dueDate: dateKey,
+          createdAt: new Date().toISOString(),
+        });
+        added++;
+      }
+    }
+    await store.setJSON(KEY_JOBS, kept);
+    return res(200, { ok: true, added });
   }
 
   // DELETE /api/jobs[?slotId=xyz]
@@ -191,5 +257,6 @@ export const config = {
     "/api/jobs",
     "/api/jobs/me",
     "/api/jobs/complete",
+    "/api/jobs/week",
   ],
 };

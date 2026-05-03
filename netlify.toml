@@ -6,6 +6,12 @@
   directory = "netlify/functions"
   node_bundler = "esbuild"
 
+# Daybook email send (Resend)
+[[redirects]]
+  from = "/api/send-daybook"
+  to = "/.netlify/functions/send-daybook"
+  status = 200
+
 # Existing Citizen Gas dashboard SPA
 [[redirects]]
   from = "/dashboard/*"

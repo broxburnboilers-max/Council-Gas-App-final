@@ -154,6 +154,11 @@
         await waitFor(function () { return findClickableByText("GSC Email"); }, 8000);
       }
 
+      // Bandofmates uses alert() to announce success and may use confirm() —
+      // suppress both so the import completes silently.
+      try { window.alert = function () {}; } catch (e) {}
+      try { window.confirm = function () { return true; }; } catch (e) {}
+
       async function autoImport() {
         // Fetch queued submissions
         show("Importing engineer submissions…", "Checking the cloud queue.");
@@ -242,14 +247,44 @@
           if (!parseBtn || parseBtn.disabled) throw new Error("Parse button unavailable");
           parseBtn.click();
 
-          // 5. Wait for parse to finish, then look for an Import-style action button.
-          await new Promise(function (r) { setTimeout(r, 600); });
-          var importBtn = findClickableByText("Import All") || findClickableByText("Import all") ||
-                          findClickableByText("Import Records") || findClickableByText("Import");
-          if (importBtn && !importBtn.disabled) {
-            importBtn.click();
-            await new Promise(function (r) { setTimeout(r, 800); });
+          // 5. Wait for parse to finish, then click the create/import action.
+          //    The bandofmates button label is "✅ Create N Gas Safety Certificates".
+          //    Hunt for it by substring ("Create" + "Certificate") and try a few
+          //    fallbacks before giving up.
+          await new Promise(function (r) { setTimeout(r, 800); });
+          function findCreateBtn() {
+            var btns = document.querySelectorAll("button");
+            for (var i = 0; i < btns.length; i++) {
+              var t = (btns[i].textContent || "").trim();
+              if (t.indexOf("Create") !== -1 && t.indexOf("Certificate") !== -1) return btns[i];
+            }
+            for (var j = 0; j < btns.length; j++) {
+              var t2 = (btns[j].textContent || "").trim();
+              if (/^✅/.test(t2) || t2.toLowerCase().indexOf("create") === 0) return btns[j];
+            }
+            return null;
           }
+          var importBtn = findCreateBtn();
+          // Wait up to 4s if the parse is still running.
+          if (!importBtn) {
+            try {
+              importBtn = await waitFor(findCreateBtn, 4000);
+            } catch (e) {}
+          }
+          if (!importBtn || importBtn.disabled) {
+            throw new Error("Create button not found after parse");
+          }
+          importBtn.click();
+          // Bandofmates may show a confirm() dialog — we already auto-accepted
+          // any window.confirm via the override below. Wait for the alert and
+          // for the records to land in localStorage.
+          await waitFor(function () {
+            try {
+              var rs = JSON.parse(localStorage.getItem("gsc_records") || "[]");
+              return rs.length > Object.keys(preExistingSavedAt).length;
+            } catch (e) { return false; }
+          }, 8000);
+          await new Promise(function (r) { setTimeout(r, 300); });
 
           // 5b. Override engineer fields on every freshly-imported record so the
           // certificate shows the engineer who actually did the visit

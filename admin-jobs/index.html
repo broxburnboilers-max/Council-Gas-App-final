@@ -337,12 +337,18 @@
         return y + "-" + m + "-" + dd;
       }
 
-      // Find the most recent Monday on/before today.
+      // Find the most recent Monday on/before today, using London time so the
+      // grid is always aligned with the engineer's local working week even if
+      // the admin's device is set to a different timezone.
       function mostRecentMonday() {
-        var d = new Date();
-        d.setHours(0, 0, 0, 0);
-        var dow = d.getDay(); // 0=Sun, 1=Mon ... 6=Sat
-        var offset = dow === 0 ? -6 : (1 - dow); // back to Monday
+        // "en-CA" gives YYYY-MM-DD; "en-GB" with weekday gives the day name.
+        var ymd = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/London" });
+        var weekday = new Date().toLocaleDateString("en-GB", { timeZone: "Europe/London", weekday: "short" });
+        var dowMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+        var dow = dowMap[weekday] != null ? dowMap[weekday] : new Date().getDay();
+        var parts = ymd.split("-");
+        var d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+        var offset = dow === 0 ? -6 : (1 - dow);
         d.setDate(d.getDate() + offset);
         return d;
       }

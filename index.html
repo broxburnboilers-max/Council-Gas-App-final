@@ -463,9 +463,10 @@
           jobsListEl.appendChild(btn);
         });
         if (!jobs.length) {
-          // Friendly message keyed off the day-of-week so weekends read naturally.
-          var dow = new Date().getDay();
-          var weekend = (dow === 0 || dow === 6);
+          // Friendly message keyed off London day-of-week so weekends read naturally
+          // even if the engineer's phone is set to a different timezone.
+          var ldow = new Date().toLocaleDateString("en-GB", { timeZone: "Europe/London", weekday: "short" });
+          var weekend = (ldow === "Sat" || ldow === "Sun");
           var msg = weekend
             ? "No jobs today — enjoy your weekend. Tap below to start a visit manually if needed."
             : "No jobs scheduled for today. Tap below to start a visit manually if needed.";

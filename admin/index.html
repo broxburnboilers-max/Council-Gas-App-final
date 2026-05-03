@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#2a52d4" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>Gas Safety – Admin</title>
+    <script type="module" crossorigin src="./assets/index-Zyqhj0a4.js"></script>
+    <style>
+      #gs-import-overlay {
+        position: fixed; inset: 0; z-index: 99999;
+        background: rgba(20, 25, 35, 0.92);
+        color: #f5f5f5;
+        display: none; flex-direction: column; align-items: center; justify-content: center;
+        font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+        text-align: center; padding: 24px;
+      }
+      #gs-import-overlay.show { display: flex; }
+      #gs-import-overlay .spinner {
+        width: 56px; height: 56px; border-radius: 50%;
+        border: 5px solid rgba(255,255,255,0.18);
+        border-top-color: #2a52d4;
+        animation: gs-spin 0.9s linear infinite;
+        margin-bottom: 24px;
+      }
+      @keyframes gs-spin { to { transform: rotate(360deg); } }
+      #gs-import-overlay h2 { font-size: 22px; font-weight: 700; margin: 0 0 8px; }
+      #gs-import-overlay p { font-size: 14px; color: #cdd5dc; margin: 0; max-width: 320px; line-height: 1.5; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <div id="gs-import-overlay" role="dialog" aria-live="polite">
+      <div class="spinner"></div>
+      <h2 id="gs-import-title">Importing engineer submissions…</h2>
+      <p id="gs-import-msg">Pulling new visits from the cloud queue.</p>
+    </div>
+
+    <script>
+    (function () {
+      // Auth gate — must come from the engineer sign-in screen's Admin button.
+      try {
+        if (sessionStorage.getItem("gsAdminAuth") !== "1") {
+          // Soft redirect back home if landed here without auth.
+          window.location.href = "/";
+          return;
+        }
+      } catch (e) {}
+
+      var ADMIN_KEY = "Test";
+      try { ADMIN_KEY = sessionStorage.getItem("gsAdminKey") || ADMIN_KEY; } catch (e) {}
+
+      var overlay = document.getElementById("gs-import-overlay");
+      var titleEl = document.getElementById("gs-import-title");
+      var msgEl = document.getElementById("gs-import-msg");
+
+      function show(title, msg) {
+        titleEl.textContent = title;
+        msgEl.textContent = msg;
+        overlay.classList.add("show");
+      }
+      function hide() {
+        overlay.classList.remove("show");
+      }
+
+      // Wait until the React app is mounted enough that we can find the home buttons.
+      function waitFor(predicate, timeoutMs) {
+        return new Promise(function (resolve, reject) {
+          var start = Date.now();
+          var iv = setInterval(function () {
+            var v = predicate();
+            if (v) { clearInterval(iv); resolve(v); }
+            else if (Date.now() - start > timeoutMs) { clearInterval(iv); reject(new Error("timeout")); }
+          }, 80);
+        });
+      }
+
+      function findButtonByText(text) {
+        var btns = document.querySelectorAll("button");
+        for (var i = 0; i < btns.length; i++) {
+          var t = (btns[i].textContent || "").trim();
+          if (t === text) return btns[i];
+          if (t.indexOf(text) !== -1) return btns[i];
+        }
+        return null;
+      }
+
+      function setReactInputValue(el, value) {
+        var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
+        setter.call(el, value);
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+
+      async function autoImport() {
+        // Fetch queued submissions
+        show("Importing engineer submissions…", "Checking the cloud queue.");
+        var items = [];
+        try {
+          var resp = await fetch("/api/submissions", {
+            method: "GET",
+            headers: { "x-admin-key": ADMIN_KEY },
+          });
+          if (!resp.ok) {
+            if (resp.status === 401) {
+              show("Auth failed", "Admin key rejected. Please sign in again.");
+              setTimeout(function () { sessionStorage.removeItem("gsAdminAuth"); window.location.href = "/"; }, 2500);
+              return;
+            }
+            show("Cloud queue unreachable", "Status " + resp.status + ". You can still use the app manually.");
+            setTimeout(hide, 2500);
+            return;
+          }
+          var data = await resp.json();
+          items = (data && data.items) || [];
+        } catch (e) {
+          show("Offline", "Couldn't reach the queue. You can still use the app manually.");
+          setTimeout(hide, 2500);
+          return;
+        }
+
+        if (!items.length) {
+          show("No new submissions", "The queue is empty.");
+          setTimeout(hide, 1500);
+          return;
+        }
+
+        show("Found " + items.length + " submission" + (items.length === 1 ? "" : "s"), "Importing into Gas Safety records…");
+
+        // Concatenate every body. The bandofmates parser handles multiple PROPERTY blocks
+        // separated by newlines, and END OF JOB resets state.
+        var combined = items.map(function (it) {
+          return (it.body || "").trim();
+        }).filter(Boolean).join("\n\nEND OF JOB\n\n");
+
+        // Drive the UI: home → GSC Email → Import tab → paste → Parse → Import All
+        try {
+          // 1. Click "GSC Email" home button
+          await waitFor(function () { return findButtonByText("GSC Email"); }, 8000);
+          findButtonByText("GSC Email").click();
+
+          // 2. Click "Import Reply" tab
+          await waitFor(function () { return findButtonByText("Import Reply"); }, 4000);
+          findButtonByText("Import Reply").click();
+
+          // 3. Find the textarea and fill it
+          var ta = await waitFor(function () {
+            var els = document.querySelectorAll("textarea");
+            for (var i = 0; i < els.length; i++) {
+              if ((els[i].placeholder || "").indexOf("Paste the completed email reply") !== -1) return els[i];
+            }
+            return null;
+          }, 4000);
+          setReactInputValue(ta, combined);
+
+          // 4. Click Parse Email
+          await new Promise(function (r) { setTimeout(r, 200); });
+          var parseBtn = findButtonByText("Parse Email");
+          if (!parseBtn || parseBtn.disabled) throw new Error("Parse button unavailable");
+          parseBtn.click();
+
+          // 5. Wait for parse to finish, then look for an Import-style action button.
+          await new Promise(function (r) { setTimeout(r, 600); });
+          var importBtn = findButtonByText("Import All") || findButtonByText("Import all") ||
+                          findButtonByText("Import Records") || findButtonByText("Import");
+          if (importBtn && !importBtn.disabled) {
+            importBtn.click();
+            await new Promise(function (r) { setTimeout(r, 400); });
+          }
+
+          // 6. Clear the cloud queue (success).
+          await fetch("/api/submissions", {
+            method: "DELETE",
+            headers: { "x-admin-key": ADMIN_KEY },
+          }).catch(function () {});
+
+          show("Done", "Imported " + items.length + " submission" + (items.length === 1 ? "" : "s") + ".");
+          setTimeout(hide, 1200);
+        } catch (e) {
+          show("Auto-import paused", "Found " + items.length + " in queue but the parser screen didn't load in time. The data is still in the textarea — tap Parse Email manually.");
+          setTimeout(hide, 4000);
+        }
+      }
+
+      // Kick off after the bundle has had a moment to mount.
+      window.addEventListener("DOMContentLoaded", function () {
+        setTimeout(autoImport, 600);
+      });
+    })();
+    </script>
+  </body>
+</html>

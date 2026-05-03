@@ -2,13 +2,23 @@
   command = ""
   publish = "."
 
-# Gas Safe dashboard SPA — preserve hash, serve dashboard index for any /dashboard path
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+# Existing Citizen Gas dashboard SPA
 [[redirects]]
   from = "/dashboard/*"
   to = "/dashboard/index.html"
   status = 200
 
-# Citizen Gas SPA fallback — serve root index.html for any unknown route
+# Gas Safety admin app SPA
+[[redirects]]
+  from = "/admin/*"
+  to = "/admin/index.html"
+  status = 200
+
+# Citizen Gas SPA fallback
 [[redirects]]
   from = "/*"
   to = "/index.html"

@@ -78,17 +78,59 @@
       <button id="cg-sent-done" type="button">Done</button>
     </div>
 
+    <!-- Admin sign-in shortcut (always visible on the engineer sign-in screen) -->
+    <button id="cg-signin-admin-btn" type="button" aria-label="Admin login" style="
+      position:fixed; left:50%; transform:translateX(-50%); bottom:16px; z-index:9997;
+      background:transparent; color:#9aa6ad; border:1px solid #3a4a55;
+      border-radius:999px; padding:8px 18px; font:600 12px/1 ui-sans-serif,system-ui,'Segoe UI',Roboto,sans-serif;
+      letter-spacing:0.08em; text-transform:uppercase; cursor:pointer; display:none;
+    ">Admin</button>
+
     <script>
     (function () {
       var overlay = document.getElementById("cg-sent-overlay");
       var doneBtn = document.getElementById("cg-sent-done");
 
+      // ── Cloud queue: POST visit data to /api/submissions when queued locally ──
+      function pushLatestToCloud() {
+        try {
+          var queue = JSON.parse(localStorage.getItem("citizenGas.queue") || "[]");
+          if (!queue.length) return;
+          var latest = queue[queue.length - 1];
+          if (!latest || latest._cloudSent) return;
+          var profile = null;
+          try { profile = JSON.parse(localStorage.getItem("citizenGas.engineerProfile") || "null"); } catch (e) {}
+          fetch("/api/submissions", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              subject: latest.subject,
+              body: latest.body,
+              engineer: profile,
+            }),
+          }).then(function (r) {
+            if (!r.ok) return;
+            // mark as cloud-sent so we don't double-post
+            try {
+              var q2 = JSON.parse(localStorage.getItem("citizenGas.queue") || "[]");
+              for (var i = q2.length - 1; i >= 0; i--) {
+                if (q2[i].id === latest.id) { q2[i]._cloudSent = true; break; }
+              }
+              localStorage.setItem("citizenGas.queue", JSON.stringify(q2));
+            } catch (e) {}
+          }).catch(function () { /* best-effort; engineer can retry by Done */ });
+        } catch (e) { /* ignore */ }
+      }
+
       window.addEventListener("citizenGas:queued", function () {
         overlay.classList.add("show");
+        pushLatestToCloud();
       });
 
       doneBtn.addEventListener("click", function () {
         overlay.classList.remove("show");
+        // Retry cloud push in case the engineer was offline a moment ago.
+        pushLatestToCloud();
         // Reset run-through: clear in-app state but keep engineer profile & queue.
         try {
           Object.keys(localStorage).forEach(function (k) {
@@ -99,25 +141,14 @@
             }
           });
         } catch (e) {}
-        // Send the engineer to the dashboard so the queued visit is auto-imported
-        // into Records → Gas Safety Certificates → today's date subfolder.
-        try {
-          var queue = JSON.parse(localStorage.getItem("citizenGas.queue") || "[]");
-          if (queue && queue.length > 0) {
-            window.location.href = "/dashboard/?admin=1";
-            return;
-          }
-        } catch (e) {}
-        // No queued work — just bounce home.
+        // Engineer flow ends here — bounce home. They never see the certificate.
         window.location.href = "/";
       });
 
-      // ── Admin button → dashboard (visible only after engineer sign-in) ──
+      // ── Existing dashboard shortcut (visible only after engineer sign-in) ──
       var adminBtn = document.getElementById("cg-admin-btn");
 
       adminBtn.addEventListener("click", function () {
-        // Plain navigation — dashboard handles password gate normally.
-        // Queue (if any) will be processed inside the dashboard via a button.
         window.location.href = "/dashboard/";
       });
 
@@ -126,23 +157,42 @@
           var raw = localStorage.getItem("citizenGas.engineerProfile");
           if (!raw) return false;
           var p = JSON.parse(raw);
-          // Treat any populated profile as "signed in".
           return !!(p && (p.fullName || p.gasSafeRegNo || p.licenceNo));
         } catch (e) { return false; }
       }
 
-      function refreshAdminBtn() {
+      // ── Sign-in screen Admin button → password prompt → /admin/ ──
+      var signinAdmin = document.getElementById("cg-signin-admin-btn");
+      var ADMIN_PASSWORD = "Test";
+
+      signinAdmin.addEventListener("click", function () {
+        var pw = window.prompt("Enter admin password:");
+        if (pw === null) return;
+        if (pw !== ADMIN_PASSWORD) {
+          alert("Incorrect password.");
+          return;
+        }
+        // Stash a session flag the admin app reads on mount.
+        try {
+          sessionStorage.setItem("gsAdminAuth", "1");
+          sessionStorage.setItem("gsAdminKey", ADMIN_PASSWORD);
+        } catch (e) {}
+        window.location.href = "/admin/";
+      });
+
+      function refreshAdminBtns() {
+        // Engineer-only existing dashboard button.
         adminBtn.style.display = isSignedIn() ? "inline-flex" : "none";
+        // Sign-in screen Admin chip: shown only when not signed in.
+        signinAdmin.style.display = isSignedIn() ? "none" : "inline-flex";
       }
 
-      window.addEventListener("DOMContentLoaded", refreshAdminBtn);
-      // Re-evaluate whenever the React app updates the DOM (covers sign-in completion).
-      var adminMo = new MutationObserver(refreshAdminBtn);
+      window.addEventListener("DOMContentLoaded", refreshAdminBtns);
+      var adminMo = new MutationObserver(refreshAdminBtns);
       window.addEventListener("DOMContentLoaded", function () {
         adminMo.observe(document.body, { childList: true, subtree: true });
       });
-      // Also listen for storage changes from other tabs.
-      window.addEventListener("storage", refreshAdminBtn);
+      window.addEventListener("storage", refreshAdminBtns);
     })();
     </script>
   </body>

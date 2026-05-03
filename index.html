@@ -145,11 +145,22 @@
         window.location.href = "/";
       });
 
-      // ── Existing dashboard shortcut (visible only after engineer sign-in) ──
+      // ── In-app admin chip → same gated path as the sign-in admin chip ──
       var adminBtn = document.getElementById("cg-admin-btn");
+      var ADMIN_PASSWORD = "Test";
 
       adminBtn.addEventListener("click", function () {
-        window.location.href = "/dashboard/";
+        var pw = window.prompt("Enter admin password:");
+        if (pw === null) return;
+        if (pw !== ADMIN_PASSWORD) {
+          alert("Incorrect password.");
+          return;
+        }
+        try {
+          sessionStorage.setItem("gsAdminAuth", "1");
+          sessionStorage.setItem("gsAdminKey", ADMIN_PASSWORD);
+        } catch (e) {}
+        window.location.href = "/admin/";
       });
 
       function isSignedIn() {
@@ -163,7 +174,6 @@
 
       // ── Sign-in screen Admin button → password prompt → /admin/ ──
       var signinAdmin = document.getElementById("cg-signin-admin-btn");
-      var ADMIN_PASSWORD = "Test";
 
       signinAdmin.addEventListener("click", function () {
         var pw = window.prompt("Enter admin password:");

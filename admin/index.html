@@ -95,6 +95,25 @@
         el.dispatchEvent(new Event("change", { bubbles: true }));
       }
 
+      // First, dismiss the React app's internal password lock by
+      // typing the admin password and clicking Unlock App.
+      async function unlockReactApp() {
+        var unlockBtn = await waitFor(function () {
+          return findButtonByText("Unlock App");
+        }, 10000);
+        var pwInput = document.querySelector('input[type="password"], input[placeholder="Password"]');
+        if (pwInput) {
+          var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+          setter.call(pwInput, ADMIN_KEY);
+          pwInput.dispatchEvent(new Event("input", { bubbles: true }));
+          pwInput.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+        await new Promise(function (r) { setTimeout(r, 100); });
+        unlockBtn.click();
+        // Wait until home screen renders (one of the home buttons appears).
+        await waitFor(function () { return findButtonByText("GSC Email"); }, 6000);
+      }
+
       async function autoImport() {
         // Fetch queued submissions
         show("Importing engineer submissions…", "Checking the cloud queue.");
@@ -136,8 +155,29 @@
           return (it.body || "").trim();
         }).filter(Boolean).join("\n\nEND OF JOB\n\n");
 
-        // Drive the UI: home → GSC Email → Import tab → paste → Parse → Import All
+        // Build a map: certRef → engineer payload, so after Import All we can
+        // override engineerData per-record (Engineer Name + Gas Safe Reg No + Licence No).
+        function extractCertRef(body) {
+          var m = (body || "").match(/^\s*Cert Ref:\s*(.+?)\s*$/m);
+          return m ? m[1].trim() : null;
+        }
+        var engineerByCertRef = {};
+        items.forEach(function (it) {
+          var ref = extractCertRef(it.body);
+          if (ref && it.engineer) engineerByCertRef[ref] = it.engineer;
+        });
+        // Snapshot existing record savedAt's so we can detect freshly-imported records.
+        var preExistingSavedAt = {};
         try {
+          var preRecs = JSON.parse(localStorage.getItem("gsc_records") || "[]");
+          preRecs.forEach(function (r) { if (r && r.savedAt) preExistingSavedAt[r.savedAt] = true; });
+        } catch (e) {}
+
+        // Drive the UI: unlock → home → GSC Email → Import tab → paste → Parse → Import All
+        try {
+          // 0. Unlock the bandofmates React app first.
+          await unlockReactApp();
+
           // 1. Click "GSC Email" home button
           await waitFor(function () { return findButtonByText("GSC Email"); }, 8000);
           findButtonByText("GSC Email").click();
@@ -168,8 +208,31 @@
                           findButtonByText("Import Records") || findButtonByText("Import");
           if (importBtn && !importBtn.disabled) {
             importBtn.click();
-            await new Promise(function (r) { setTimeout(r, 400); });
+            await new Promise(function (r) { setTimeout(r, 800); });
           }
+
+          // 5b. Override engineer fields on every freshly-imported record so the
+          // certificate shows the engineer who actually did the visit
+          // (Name + Gas Safe Reg No + Licence No), not the admin's default profile.
+          try {
+            var recs = JSON.parse(localStorage.getItem("gsc_records") || "[]");
+            var changed = false;
+            for (var ri = 0; ri < recs.length; ri++) {
+              var rec = recs[ri];
+              if (!rec || preExistingSavedAt[rec.savedAt]) continue; // skip pre-existing
+              var ref = rec && rec.certData && rec.certData.certRef;
+              var eng = ref ? engineerByCertRef[ref] : null;
+              if (!eng) continue;
+              rec.engineerData = rec.engineerData || {};
+              if (eng.fullName) rec.engineerData.engineerName = eng.fullName;
+              if (eng.gasSafeRegNo) rec.engineerData.gasSafeNo = eng.gasSafeRegNo;
+              if (eng.licenceNo) rec.engineerData.gasId = eng.licenceNo;
+              changed = true;
+            }
+            if (changed) {
+              localStorage.setItem("gsc_records", JSON.stringify(recs));
+            }
+          } catch (e) { /* leave records unchanged on failure */ }
 
           // 6. Clear the cloud queue (success).
           await fetch("/api/submissions", {

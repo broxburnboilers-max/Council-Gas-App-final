@@ -321,8 +321,16 @@
       }
 
       function refreshSlotPickerVisibility() {
-        if (slotsCache.length && isSignInScreen() && !isSignedIn()) {
+        // Show the picker whenever the sign-in screen is rendered — even for
+        // returning engineers, so they can switch slots if needed. Hide on
+        // every other screen (home, run-through, etc.).
+        if (slotsCache.length && isSignInScreen()) {
           slotPickerEl.style.display = "flex";
+          // Pre-select the saved slot if there is one.
+          try {
+            var saved = localStorage.getItem(SLOT_KEY_LS) || "";
+            if (saved && slotSelectEl.value !== saved) slotSelectEl.value = saved;
+          } catch (e) {}
         } else {
           slotPickerEl.style.display = "none";
         }

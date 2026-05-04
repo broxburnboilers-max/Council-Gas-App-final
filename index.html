@@ -765,16 +765,31 @@
 
       function showEndOfDayOverlay() {
         // Update the existing #cg-sent-overlay copy for the end-of-day case.
-        // The Done/Finish button is repurposed into 'Send to admin' which
-        // triggers the daybook email. After the email is sent (or cancelled)
-        // the overlay's normal Done handler still runs to clear state.
+        // The Done/Finish button is repurposed into 'Review and send to admin'
+        // which triggers the daybook email. After the email is sent (or
+        // cancelled) the overlay's normal Done handler still runs to clear
+        // state.
         try {
           var h1 = overlay.querySelector("h1");
           var p = overlay.querySelector("p");
-          if (h1) h1.textContent = "All jobs complete";
-          if (p) p.textContent = "Tap below to email today's daybook to admin.";
+          if (h1) h1.textContent = "Day finished \u2014 all jobs complete";
+          // Show how many certs are queued for sending so the engineer has a
+          // quick sanity check before tapping the Review-and-send button.
+          var summary = "Tap below to review and send today's daybook to admin.";
+          try {
+            var d = JSON.parse(localStorage.getItem("citizenGas.daybook") || "null");
+            if (d && Array.isArray(d.certs)) {
+              var certCount = d.certs.length;
+              var noAccessCount = (d.noAccess || []).length;
+              var parts = [];
+              if (certCount) parts.push(certCount + " certificate" + (certCount === 1 ? "" : "s"));
+              if (noAccessCount) parts.push(noAccessCount + " no-access" + (noAccessCount === 1 ? "" : "es"));
+              if (parts.length) summary = parts.join(", ") + " ready. Tap below to review and send today's daybook to admin.";
+            }
+          } catch (e) {}
+          if (p) p.textContent = summary;
           if (doneBtn) {
-            doneBtn.textContent = "Send today's daybook to admin";
+            doneBtn.textContent = "Review and send to admin";
             doneBtn.dataset.endOfDay = "1";
           }
         } catch (e) {}
@@ -785,6 +800,112 @@
         // Defer slightly so React commits its post-send state first.
         setTimeout(markJobCompleteAndContinue, 250);
       });
+
+      // ====== Auto-skip the per-property /review screen ======
+      //
+      // The engineer used to land on /review after every property to tap a
+      // 'Send' button. The user asked for that page to be removed from the
+      // run-through entirely — each property's data should save and move
+      // straight on to the next property, with a single 'Review and send to
+      // admin' page only at the end of the day.
+      //
+      // Implementation: we let React route to #/review (so its state is fully
+      // mounted and the photo-harvesting DOM exists), then synchronously
+      // (a) hide that screen visually with a CSS overlay, and (b) auto-click
+      // [data-testid="button-send"] as soon as it appears. The existing
+      // citizenGas:queued -> markJobCompleteAndContinue chain then bounces the
+      // engineer to either the next property or the end-of-day overlay.
+      //
+      // Why not skip /review altogether (block the route): the bundle's
+      // queue-write happens inside the review-page Send handler, and our
+      // photo harvester reads from the still-mounted review DOM. Letting
+      // React mount /review for ~50-150 ms (invisible to the engineer)
+      // preserves all that machinery; only the visual experience changes.
+      var AUTO_SEND_FLAG_PROP = "__cgAutoSendDone";
+      // Inject a CSS rule that hides the React #root content while we're on
+      // the /review route. Visible only after we add the .cg-skip-review
+      // class to <html>; removed when we leave /review.
+      (function injectSkipReviewStyle() {
+        try {
+          var s = document.createElement("style");
+          s.id = "cg-skip-review-style";
+          s.textContent =
+            "html.cg-skip-review #root { visibility: hidden !important; }" +
+            "html.cg-skip-review body::after {" +
+              "content: 'Saving\\2026';" +
+              "position: fixed; inset: 0;" +
+              "display: flex; align-items: center; justify-content: center;" +
+              "font: 600 16px/1.4 ui-sans-serif, system-ui, 'Segoe UI', Roboto, sans-serif;" +
+              "color: #fff;" +
+              "background: linear-gradient(160deg, #1a3bbf 0%, #2a52d4 60%, #1a3bbf 100%);" +
+              "z-index: 99998;" +
+            "}";
+          (document.head || document.documentElement).appendChild(s);
+        } catch (e) {}
+      })();
+
+      function isOnReviewScreen() {
+        var h = (location.hash || "").replace(/^#/, "");
+        return h === "/review" || h.indexOf("/review") === 0
+            || location.pathname === "/review";
+      }
+
+      function maybeAutoSkipReview() {
+        var html = document.documentElement;
+        if (!isOnReviewScreen()) {
+          html.classList.remove("cg-skip-review");
+          // Reset the per-route flag once we leave /review so the next visit
+          // can fire its own auto-click.
+          try { delete html[AUTO_SEND_FLAG_PROP]; } catch (e) {}
+          return;
+        }
+        // We're on /review. Hide it.
+        html.classList.add("cg-skip-review");
+        // Has React already shown its post-send 'Sent' state for this route
+        // visit? If so, do nothing — the markJobCompleteAndContinue chain is
+        // already handling navigation.
+        if (html[AUTO_SEND_FLAG_PROP]) return;
+        // Find the Send button. Until React mounts it, this returns null —
+        // the MutationObserver below re-invokes us when the DOM updates.
+        var sendBtn = document.querySelector('[data-testid="button-send"]');
+        if (!sendBtn) return;
+        // Don't fire if the button is already in its post-send state —
+        // patchReviewScreenUI rewrites the label to 'Finish job' pre-send and
+        // React swaps the whole sub-tree post-send. The presence of the
+        // 'button-reopen-mail' element is the post-send signal.
+        if (document.querySelector('[data-testid="button-reopen-mail"]')) {
+          html[AUTO_SEND_FLAG_PROP] = true;
+          return;
+        }
+        html[AUTO_SEND_FLAG_PROP] = true;
+        // Click it. Use a microtask so any in-flight React commit settles
+        // first. The bundle's onClick writes citizenGas.queue and dispatches
+        // citizenGas:queued; our handler then drives the next-property /
+        // end-of-day flow.
+        try {
+          // Photo harvest reads from the review DOM — do that BEFORE the
+          // click so the photos are sitting in the queued cert. The
+          // existing citizenGas:queued listener also harvests, so this is
+          // belt-and-braces; harmless if it duplicates.
+          if (typeof window.cgHarvestReviewPhotosNow === "function") {
+            try { window.cgHarvestReviewPhotosNow(); } catch (e) {}
+          }
+          sendBtn.click();
+        } catch (e) {}
+      }
+
+      // React mounts /review asynchronously, so a single check on hashchange
+      // fires too early. Watch the DOM for the Send button to appear and
+      // fire as soon as it does. The observer is cheap — it only walks new
+      // nodes — and the work inside maybeAutoSkipReview short-circuits when
+      // we're not on /review.
+      var skipReviewMo = new MutationObserver(maybeAutoSkipReview);
+      window.addEventListener("DOMContentLoaded", function () {
+        maybeAutoSkipReview();
+        skipReviewMo.observe(document.body, { childList: true, subtree: true });
+      });
+      window.addEventListener("hashchange", maybeAutoSkipReview);
+      window.addEventListener("popstate", maybeAutoSkipReview);
 
       // ====== Review-screen UI patches ======
       // Rewrite the React 'Open mail app' button copy to 'Finish job'.

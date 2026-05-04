@@ -25,10 +25,16 @@ exports.handler = async function (event) {
   }
 
   const RESEND_KEY = process.env.RESEND_API_KEY || "";
-  // Send the daily daybook email to BOTH recipients automatically so the
-  // engineer doesn't have to manually forward anything. DAYBOOK_TO env var
-  // can be a single address or comma-separated list.
-  const TO_ENV = process.env.DAYBOOK_TO || "broxburnboilers@gmail.com,lspapandh@gmail.com";
+  // Send the daily daybook email automatically so the engineer doesn't have
+  // to forward anything. DAYBOOK_TO env var supports a comma-separated list
+  // of recipients.
+  //
+  // NOTE: Resend's free tier with the default onboarding@resend.dev sender
+  // can ONLY deliver to broxburnboilers@gmail.com (the account owner's
+  // verified address). To deliver to additional recipients (e.g.
+  // lspapandh@gmail.com), verify a sending domain at resend.com/domains and
+  // set DAYBOOK_FROM + DAYBOOK_TO in Netlify env vars.
+  const TO_ENV = process.env.DAYBOOK_TO || "broxburnboilers@gmail.com";
   const TO = TO_ENV.split(",").map(function (s) { return s.trim(); }).filter(Boolean);
   const FROM = process.env.DAYBOOK_FROM || "Citizen Gas <onboarding@resend.dev>";
 

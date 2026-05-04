@@ -2778,7 +2778,7 @@
       title: "Send today's daybook?",
       message: certCount + " cert" + (certCount === 1 ? "" : "s") +
         (naCount ? ", " + naCount + " no-access" : "") +
-        "\nWill be emailed to broxburnboilers@gmail.com and lspapandh@gmail.com.",
+        "\nWill be emailed to broxburnboilers@gmail.com (with photos + JSON attached).",
       buttons: [
         { label: "Cancel" },
         { label: "Send", primary: true, onClick: function () { actuallySendDaybook(d); } },
@@ -2916,7 +2916,7 @@
       refreshDaybookButton();
       showStatusModal({
         title: "Sent \u2713",
-        message: "Daybook emailed to broxburnboilers@gmail.com and lspapandh@gmail.com (photos included).\nA copy of the JSON also saved to Downloads as " + filename + ".",
+        message: "Daybook emailed to broxburnboilers@gmail.com (photos + JSON attached).\nA copy of the JSON also saved to Downloads as " + filename + ".",
         buttons: [{
           label: "Done", primary: true,
           onClick: function () {

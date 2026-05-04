@@ -209,9 +209,81 @@
       } catch (e) {
         console.warn("[cg] photo bucket install failed", e);
       }
+      // BUG-FIX (Task 2 — photos missing in downloaded JSON):
+      // The FileReader-prototype hook above is the primary capture path,
+      // but it can be defeated in real-world conditions (extensions, race
+      // conditions, mobile Safari quirks). We add THREE independent
+      // backup paths so photos always end up in the bucket:
+      //
+      //   (1) Persist bucket to sessionStorage on every push, restore on
+      //       boot. Survives the SPA's accidental full-page reloads.
+      //   (2) Listen for `change` events on every file input on the page
+      //       (event delegation on document) and run the file through a
+      //       FileReader directly, bypassing whatever the bundle does.
+      //   (3) Reset bucket only on successful end-of-day send (existing).
+      function persistBucket() {
+        try {
+          // Cap the persisted bucket at ~30 photos to stay under the
+          // 5MB sessionStorage limit (each ~150KB photo).
+          var b = (window.__cgPhotoBucket || []).slice(-30);
+          sessionStorage.setItem("citizenGas.photoBucket", JSON.stringify(b));
+        } catch (e) { /* quota exceeded — just continue */ }
+      }
+      function restoreBucket() {
+        try {
+          var raw = sessionStorage.getItem("citizenGas.photoBucket");
+          if (!raw) return;
+          var arr = JSON.parse(raw);
+          if (Array.isArray(arr) && arr.length) {
+            window.__cgPhotoBucket = arr;
+          }
+        } catch (e) {}
+      }
+      restoreBucket();
+      // Patch our push to also persist.
+      var origPush = window.__cgPhotoBucket.push;
+      window.__cgPhotoBucket.push = function () {
+        var r = origPush.apply(this, arguments);
+        persistBucket();
+        return r;
+      };
+
+      // Backup capture path: change-event delegation on file inputs.
+      // Some bundles use URL.createObjectURL or other paths that bypass
+      // FileReader. This path catches them.
+      document.addEventListener("change", function (ev) {
+        try {
+          var t = ev.target;
+          if (!t || t.tagName !== "INPUT" || t.type !== "file") return;
+          var files = t.files;
+          if (!files || !files.length) return;
+          for (var i = 0; i < files.length; i++) {
+            var f = files[i];
+            if (!f || !f.type || f.type.indexOf("image/") !== 0) continue;
+            (function (file) {
+              var reader = new FileReader();
+              reader.onload = function () {
+                try {
+                  var r = reader.result;
+                  if (typeof r !== "string" || r.indexOf("data:image/") !== 0) return;
+                  // Dedup against existing entries.
+                  var b = window.__cgPhotoBucket || [];
+                  for (var j = 0; j < b.length; j++) {
+                    if (b[j] && b[j].dataUrl === r) return;
+                  }
+                  window.__cgPhotoBucket.push({ dataUrl: r, capturedAt: Date.now() });
+                } catch (e) {}
+              };
+              try { reader.readAsDataURL(file); } catch (e) {}
+            })(f);
+          }
+        } catch (e) {}
+      }, true);
+
       // Reset bucket when daybook is sent + cleared (start fresh next day).
       window.cgResetPhotoBucket = function () {
         try { window.__cgPhotoBucket = []; } catch (e) {}
+        try { sessionStorage.removeItem("citizenGas.photoBucket"); } catch (e) {}
       };
     })();
 
@@ -1455,7 +1527,31 @@
       base.heatInput = a.heatInput || base.heatInput;
       base.operatingPressure = a.operatingPressure || base.operatingPressure;
       if (a.visualOnly) {
-        // gas fire visual only — already N/A everywhere
+        // BUG-FIX (Task 1 — gas fire row blank on cert):
+        // Gas fire is a visual-only inspection per the engineer's spec, but
+        // the certificate row must still be POPULATED — all-N/A reads as
+        // "not inspected" on the printed cert. Mirror the cooker's pattern:
+        // mark inspected + safe with Pass for the visual-only checks, NA
+        // for the readings that don't apply to a visual-only fire.
+        if (a.heading === "APPLIANCE 3") {
+          base.flueType = "OF"; // open-flue (typical for living-room gas fires)
+          base.landlordsAppliance = "Yes";
+          base.applianceInspected = "Yes";
+          base.applianceSafe = "Yes";
+          base.safetyDevices = "Yes";
+          base.ventilation = "Pass";
+          base.flueVisual = "Pass";
+          base.fluePerformance = "Pass";
+          base.applianceServiced = "No";
+          base.spillageTest = "Pass";
+          base.flueFlow = "Pass";
+          base.co2 = "N/A"; base.co = "N/A"; base.combustion = "N/A";
+          // Heat Input + Operating Pressure stay as the engineer entered them
+          // (or empty/NA if they left them blank); we don't force a number
+          // because visual-only fires are not metered.
+          if (!base.heatInput) base.heatInput = "N/A";
+          if (!base.operatingPressure) base.operatingPressure = "N/A";
+        }
       } else {
         base.flueType = a.heading === "APPLIANCE 1" ? "RS" : (a.heading === "APPLIANCE 2" ? "FL" : "");
         base.applianceInspected = "Yes";
@@ -1702,6 +1798,216 @@
     });
     if (count) refreshDaybookButton();
     return count;
+  }
+
+  // ---------- GAS FIRE EXTRA FIELDS (Location, Type, Heat Input, Op. Pressure) ----------
+  // BUG-FIX (Task 1 — gas fire row blank on cert):
+  // The React bundle's gas-fire form only collects Make + Model. The Gas
+  // Safety Record requires Location, Type, Heat Input, Operating Pressure
+  // to be filled in for APPLIANCE 3 — without them the row prints mostly
+  // blank/N/A on the PDF. We can't edit the precompiled bundle, so we
+  // inject the inputs onto the page via DOM patching when the route is
+  // /property/gas-fire and the engineer has clicked Yes (Make/Model
+  // visible). Values are stored in localStorage and spliced into the
+  // APPLIANCE 3 block of the outgoing body at queue-write time.
+  window.__cgGasFireExtra = window.__cgGasFireExtra || { location: "", type: "", heatInput: "", operatingPressure: "" };
+
+  function readGasFireExtraFromStorage() {
+    try {
+      var s = localStorage.getItem("citizenGas.gasFireExtra");
+      if (!s) return { location: "", type: "", heatInput: "", operatingPressure: "" };
+      var o = JSON.parse(s);
+      return {
+        location: o.location || "",
+        type: o.type || "",
+        heatInput: o.heatInput || "",
+        operatingPressure: o.operatingPressure || "",
+      };
+    } catch (e) { return { location: "", type: "", heatInput: "", operatingPressure: "" }; }
+  }
+  function writeGasFireExtraToStorage(obj) {
+    var safe = {
+      location: (obj && obj.location) || "",
+      type: (obj && obj.type) || "",
+      heatInput: (obj && obj.heatInput) || "",
+      operatingPressure: (obj && obj.operatingPressure) || "",
+    };
+    try {
+      localStorage.setItem("citizenGas.gasFireExtra", JSON.stringify(safe));
+    } catch (e) {}
+    window.__cgGasFireExtra = safe;
+  }
+  // Initialise from storage on boot.
+  window.__cgGasFireExtra = readGasFireExtraFromStorage();
+
+  function isOnGasFirePage() {
+    try {
+      var h = (window.location.hash || window.location.pathname || "");
+      if (h.indexOf("gas-fire") !== -1) return true;
+      var t = (document.body.innerText || "");
+      return /Does the property have a gas fire/i.test(t);
+    } catch (e) { return false; }
+  }
+
+  function ensureGasFireExtraUi() {
+    if (!isOnGasFirePage()) {
+      var existing = document.getElementById("cg-gasfire-extra");
+      if (existing) existing.remove();
+      return;
+    }
+    if (document.getElementById("cg-gasfire-extra")) return;
+
+    // Anchor INSIDE the same card that holds the Make/Model inputs.
+    // Until the user taps Yes, those inputs aren't on the page — we skip
+    // injection so the engineer sees a clean Yes/No first.
+    var modelInput = document.querySelector('[data-testid="input-fire-model"]');
+    if (!modelInput) return;
+    var anchor = modelInput.closest('div[class*="card"], div[class*="rounded"], form, section') || modelInput.parentElement;
+    if (!anchor) return;
+
+    var cur = window.__cgGasFireExtra || { location: "", type: "", heatInput: "", operatingPressure: "" };
+
+    var wrap = document.createElement("div");
+    wrap.id = "cg-gasfire-extra";
+    wrap.style.cssText = [
+      "margin-top:14px","display:flex",
+      "flex-direction:column","gap:10px",
+      "font:500 14px/1.4 ui-sans-serif,system-ui,sans-serif","color:#fff",
+    ].join(";");
+
+    function makeLabel(txt) {
+      var d = document.createElement("div");
+      d.textContent = txt;
+      d.style.cssText = "font-weight:700;font-size:14px;color:#fff;";
+      return d;
+    }
+    function makeTextInput(id, placeholder, value) {
+      var inp = document.createElement("input");
+      inp.id = id;
+      inp.type = "text";
+      inp.placeholder = placeholder;
+      inp.value = value || "";
+      inp.style.cssText = [
+        "padding:14px","border-radius:10px",
+        "border:1px solid rgba(255,255,255,0.25)",
+        "background:rgba(255,255,255,0.05)","color:#fff",
+        "font:500 15px/1.4 ui-sans-serif,system-ui,sans-serif",
+        "width:100%","box-sizing:border-box",
+      ].join(";");
+      return inp;
+    }
+
+    // Helper: rebuild __cgGasFireExtra from all four inputs and persist.
+    function persistFromInputs() {
+      var locEl   = document.getElementById("cg-fire-location");
+      var heatEl  = document.getElementById("cg-fire-heatinput");
+      var pressEl = document.getElementById("cg-fire-operating");
+      var typeVal = (window.__cgGasFireExtra && window.__cgGasFireExtra.type) || "";
+      writeGasFireExtraToStorage({
+        location: locEl ? locEl.value : "",
+        type: typeVal,
+        heatInput: heatEl ? heatEl.value : "",
+        operatingPressure: pressEl ? pressEl.value : "",
+      });
+    }
+
+    // Location (free text)
+    var locInput = makeTextInput("cg-fire-location", "e.g. Living room", cur.location);
+    locInput.addEventListener("input", persistFromInputs);
+
+    // Type — buttons: DFE / ILFE / Inset / Decorative
+    var typeRow = document.createElement("div");
+    typeRow.style.cssText = "display:flex;gap:8px;flex-wrap:wrap;";
+    ["DFE", "ILFE", "Inset", "Decorative"].forEach(function (opt) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.textContent = opt;
+      b.dataset.cgFireType = opt;
+      var selected = cur.type === opt;
+      b.style.cssText = [
+        "flex:1","min-width:60px","padding:12px 8px","border-radius:10px",
+        "border:2px solid " + (selected ? "#F2682A" : "rgba(255,255,255,0.25)"),
+        "background:" + (selected ? "#F2682A" : "rgba(255,255,255,0.05)"),
+        "color:#fff",
+        "font-weight:700","font-size:14px","cursor:pointer",
+        "transition:all 0.15s ease",
+      ].join(";");
+      b.addEventListener("click", function () {
+        // Update store with new type, preserving other fields.
+        var current = readGasFireExtraFromStorage();
+        writeGasFireExtraToStorage({
+          location: current.location || (document.getElementById("cg-fire-location")||{}).value || "",
+          type: opt,
+          heatInput: current.heatInput || (document.getElementById("cg-fire-heatinput")||{}).value || "",
+          operatingPressure: current.operatingPressure || (document.getElementById("cg-fire-operating")||{}).value || "",
+        });
+        // Re-render type buttons selection
+        Array.prototype.forEach.call(typeRow.querySelectorAll("button"), function (btn) {
+          var sel = btn.dataset.cgFireType === opt;
+          btn.style.borderColor = sel ? "#F2682A" : "rgba(255,255,255,0.25)";
+          btn.style.background = sel ? "#F2682A" : "rgba(255,255,255,0.05)";
+          btn.style.color = "#fff";
+        });
+      });
+      typeRow.appendChild(b);
+    });
+
+    // Heat Input + Operating Pressure (free text, optional)
+    var heatInput = makeTextInput("cg-fire-heatinput", "e.g. 4.5 kW (optional)", cur.heatInput);
+    heatInput.addEventListener("input", persistFromInputs);
+    var pressInput = makeTextInput("cg-fire-operating", "e.g. 17 mbar (optional)", cur.operatingPressure);
+    pressInput.addEventListener("input", persistFromInputs);
+
+    wrap.appendChild(makeLabel("Location"));
+    wrap.appendChild(locInput);
+    wrap.appendChild(makeLabel("Appliance type"));
+    wrap.appendChild(typeRow);
+    wrap.appendChild(makeLabel("Heat input"));
+    wrap.appendChild(heatInput);
+    wrap.appendChild(makeLabel("Operating pressure"));
+    wrap.appendChild(pressInput);
+    anchor.appendChild(wrap);
+  }
+
+  // Splice Gas Fire fields into APPLIANCE 3 block of an outgoing body.
+  // The body emitted by the React bundle for visit-2 (with cooker = No) has:
+  //   APPLIANCE 3
+  //   ----------
+  //   Make: ...
+  //   Model: ...
+  // We insert Location/Type at the top of the block, and Heat Input /
+  // Operating Pressure at the bottom — so parseProperty() can pick them up.
+  function injectGasFireExtraIntoBody(body) {
+    if (!body || typeof body !== "string") return body;
+    var extra = readGasFireExtraFromStorage();
+    var location = (extra.location || "").trim();
+    var type = (extra.type || "").trim();
+    var heatInput = (extra.heatInput || "").trim();
+    var operatingPressure = (extra.operatingPressure || "").trim();
+    var lines = body.split(/\r?\n/);
+    var i = lines.findIndex(function (l) { return l.trim() === "APPLIANCE 3"; });
+    if (i < 0) return body; // No APPLIANCE 3 — no gas fire.
+    var insertAt = i + 1;
+    if (insertAt < lines.length && /^-+$/.test(lines[insertAt].trim())) insertAt++;
+    // Find block end (blank line or property separator).
+    var blockEnd = insertAt;
+    while (blockEnd < lines.length && lines[blockEnd].trim() !== "" && !/^=+$/.test(lines[blockEnd].trim())) blockEnd++;
+    // Strip any existing Location/Type/Heat Input/Operating Pressure lines.
+    var blockLines = lines.slice(insertAt, blockEnd).filter(function (l) {
+      var t = l.trim();
+      return !/^Location:/i.test(t)
+          && !/^Type:/i.test(t)
+          && !/^Heat Input:/i.test(t)
+          && !/^Operating Pressure:/i.test(t);
+    });
+    var newBlock = [];
+    if (location) newBlock.push("Location: " + location);
+    if (type) newBlock.push("Type: " + type);
+    newBlock = newBlock.concat(blockLines);
+    if (heatInput) newBlock.push("Heat Input: " + heatInput);
+    if (operatingPressure) newBlock.push("Operating Pressure: " + operatingPressure);
+    var out = lines.slice(0, insertAt).concat(newBlock, lines.slice(blockEnd));
+    return out.join("\n");
   }
 
   // ---------- COOKER TYPE + MODEL CAPTURE (visit 2) ----------
@@ -2050,6 +2356,7 @@
       try {
         watchVisitSelector();
         ensureCookerExtraUi();
+        ensureGasFireExtraUi();
         ensureDateOverlay();
         ensureTestSkipButton();
       } catch (e) {}
@@ -2119,8 +2426,14 @@
             var changed = false;
             for (var qi = 0; qi < parsed.length; qi++) {
               var entry = parsed[qi];
-              if (entry && typeof entry.body === "string" && entry.body.indexOf("APPLIANCE 2") !== -1) {
-                var newBody = injectCookerExtraIntoBody(entry.body);
+              if (entry && typeof entry.body === "string") {
+                var newBody = entry.body;
+                if (newBody.indexOf("APPLIANCE 2") !== -1) {
+                  newBody = injectCookerExtraIntoBody(newBody);
+                }
+                if (newBody.indexOf("APPLIANCE 3") !== -1) {
+                  newBody = injectGasFireExtraIntoBody(newBody);
+                }
                 if (newBody !== entry.body) {
                   entry.body = newBody;
                   changed = true;

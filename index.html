@@ -1921,7 +1921,8 @@
       var parent = input.parentElement;
       if (!parent) return;
       if (existing) {
-        existing.textContent = ddmmyyyy(input.value);
+        var newText = ddmmyyyy(input.value);
+        if (existing.textContent !== newText) existing.textContent = newText;
         return;
       }
       // Hide the native rendered text by making the input transparent

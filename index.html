@@ -1218,7 +1218,8 @@
       base.location = a.location || base.location;
       base.type = a.type || base.type;
       base.make = a.make || base.make;
-      base.model = a.model || base.model;
+      // Model: render as "NA" if engineer didn't enter one (per user spec).
+      base.model = (a.model && a.model.trim()) ? a.model.trim() : "NA";
       base.heatInput = a.heatInput || base.heatInput;
       base.operatingPressure = a.operatingPressure || base.operatingPressure;
       if (a.visualOnly) {
@@ -1453,6 +1454,224 @@
     return count;
   }
 
+  // ---------- COOKER TYPE + MODEL CAPTURE (visit 2) ----------
+  // The React bundle's cooker-hob form only collects Location / Make /
+  // Operating Pressure. Engineers also need to record:
+  //   - Type: Cooker or Hob
+  //   - Model: free text (renders as "NA" on cert when blank)
+  // We can't edit the precompiled bundle, so we inject the inputs onto the
+  // page via DOM patching when the route is /property/cooker-hob and the
+  // current property's visit is 2 (per user requirement: visit-1 cooker info
+  // is NOT emitted onto the cert).
+  //
+  // The values are stored on a global so the queue-write interceptor below
+  // can splice them into the APPLIANCE 2 block of the outgoing body.
+  window.__cgCookerExtra = window.__cgCookerExtra || { type: "", model: "" };
+
+  function readCookerExtraFromStorage() {
+    try {
+      var s = localStorage.getItem("citizenGas.cookerExtra");
+      if (!s) return { type: "", model: "" };
+      var o = JSON.parse(s);
+      return { type: o.type || "", model: o.model || "" };
+    } catch (e) { return { type: "", model: "" }; }
+  }
+  function writeCookerExtraToStorage(t, m) {
+    try {
+      localStorage.setItem("citizenGas.cookerExtra", JSON.stringify({ type: t || "", model: m || "" }));
+    } catch (e) {}
+    window.__cgCookerExtra = { type: t || "", model: m || "" };
+  }
+  // Initialise from storage on boot.
+  window.__cgCookerExtra = readCookerExtraFromStorage();
+
+  // Detect the current visit number from the React-controlled DOM. The form
+  // shows two large "1" / "2" buttons; the selected one carries an extra
+  // gradient class. As a safety net we also check for the "Second visit"
+  // text rendered by the cap-tightness page.
+  function currentVisitIs2() {
+    try {
+      // The visit selector page shows two buttons; once chosen the user
+      // has navigated away, so we can't read it directly here. Instead we
+      // look for tell-tale strings on the cooker / cap-tightness pages.
+      var bodyTxt = (document.body.innerText || "");
+      if (/Second visit/i.test(bodyTxt)) return true;
+      if (/Install cooker.*tightness test/i.test(bodyTxt)) return true;
+      if (/Cooker installed/i.test(bodyTxt)) return true;
+      // Otherwise fall back to last-known visit cached by the visit page.
+      var lk = localStorage.getItem("citizenGas.lastVisit");
+      return lk === "2";
+    } catch (e) { return false; }
+  }
+
+  // Cache the visit number whenever we see the visit selector — lets us
+  // determine visit on later pages even after React has navigated away.
+  function watchVisitSelector() {
+    try {
+      var btns = document.querySelectorAll('button[class*="citizen-gradient-bg"]');
+      btns.forEach(function (b) {
+        var t = (b.textContent || "").trim();
+        if (t === "1" || t === "2") {
+          try { localStorage.setItem("citizenGas.lastVisit", t); } catch (e) {}
+        }
+      });
+    } catch (e) {}
+  }
+
+  function isOnCookerHobPage() {
+    try {
+      var h = (window.location.hash || window.location.pathname || "");
+      if (h.indexOf("cooker-hob") !== -1) return true;
+      // Hash routers may not put the path in pathname — check for the
+      // unique question text the bundle renders.
+      var t = (document.body.innerText || "");
+      return /Does the property have a gas cooker or hob/i.test(t);
+    } catch (e) { return false; }
+  }
+
+  function ensureCookerExtraUi() {
+    if (!isOnCookerHobPage()) {
+      var existing = document.getElementById("cg-cooker-extra");
+      if (existing) existing.remove();
+      return;
+    }
+    if (!currentVisitIs2()) return; // visit-1: don't show, per user spec
+    if (document.getElementById("cg-cooker-extra")) return;
+
+    // Find the Operating Pressure input so we can insert below it.
+    var inputs = document.querySelectorAll("input, label");
+    var anchor = null;
+    for (var i = 0; i < inputs.length; i++) {
+      var el = inputs[i];
+      var lbl = (el.textContent || el.placeholder || "").trim();
+      if (/Operating Pressure/i.test(lbl) || (el.placeholder && /pressure/i.test(el.placeholder))) {
+        // Walk up to the closest card / form container.
+        anchor = el.closest('div[class*="card"], div[class*="flex-col"], form, section') || el.parentElement;
+        if (anchor) break;
+      }
+    }
+    // Fallback: append to the form / main container.
+    if (!anchor) anchor = document.querySelector('form, main, [class*="flex-col"]');
+    if (!anchor) return;
+
+    var cur = window.__cgCookerExtra || { type: "", model: "" };
+
+    var wrap = document.createElement("div");
+    wrap.id = "cg-cooker-extra";
+    wrap.style.cssText = [
+      "margin-top:14px","padding:14px","border:2px solid #2a52d4",
+      "border-radius:12px","background:#f5f8ff","display:flex",
+      "flex-direction:column","gap:12px",
+      "font:500 14px/1.4 ui-sans-serif,system-ui,sans-serif","color:#1a2330",
+    ].join(";");
+
+    // Type radio
+    var typeLabel = document.createElement("div");
+    typeLabel.textContent = "Appliance type";
+    typeLabel.style.cssText = "font-weight:700;font-size:14px;";
+    var typeRow = document.createElement("div");
+    typeRow.style.cssText = "display:flex;gap:10px;";
+    ["Cooker", "Hob"].forEach(function (opt) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.textContent = opt;
+      b.dataset.cgType = opt;
+      var selected = cur.type === opt;
+      b.style.cssText = [
+        "flex:1","padding:12px","border-radius:10px",
+        "border:2px solid " + (selected ? "#2a52d4" : "#cbd5e1"),
+        "background:" + (selected ? "#2a52d4" : "#fff"),
+        "color:" + (selected ? "#fff" : "#1a2330"),
+        "font-weight:700","font-size:14px","cursor:pointer",
+      ].join(";");
+      b.addEventListener("click", function () {
+        var modelInp = document.getElementById("cg-cooker-model");
+        var m = modelInp ? modelInp.value : (window.__cgCookerExtra && window.__cgCookerExtra.model) || "";
+        writeCookerExtraToStorage(opt, m);
+        // Re-render type buttons
+        Array.prototype.forEach.call(typeRow.querySelectorAll("button"), function (btn) {
+          var sel = btn.dataset.cgType === opt;
+          btn.style.borderColor = sel ? "#2a52d4" : "#cbd5e1";
+          btn.style.background = sel ? "#2a52d4" : "#fff";
+          btn.style.color = sel ? "#fff" : "#1a2330";
+        });
+      });
+      typeRow.appendChild(b);
+    });
+
+    // Model input
+    var modelLabel = document.createElement("div");
+    modelLabel.textContent = "Model";
+    modelLabel.style.cssText = "font-weight:700;font-size:14px;";
+    var modelInput = document.createElement("input");
+    modelInput.id = "cg-cooker-model";
+    modelInput.type = "text";
+    modelInput.placeholder = "e.g. KCH-624 (leave blank for NA)";
+    modelInput.value = cur.model || "";
+    modelInput.style.cssText = [
+      "padding:12px","border-radius:10px","border:2px solid #cbd5e1",
+      "font:500 14px/1.4 ui-sans-serif,system-ui,sans-serif",
+      "width:100%","box-sizing:border-box",
+    ].join(";");
+    modelInput.addEventListener("input", function () {
+      var t = (window.__cgCookerExtra && window.__cgCookerExtra.type) || "";
+      writeCookerExtraToStorage(t, modelInput.value);
+    });
+    var modelHelp = document.createElement("div");
+    modelHelp.textContent = "NA";
+    modelHelp.style.cssText = "font-size:12px;color:#64748b;font-style:italic;";
+
+    wrap.appendChild(typeLabel);
+    wrap.appendChild(typeRow);
+    wrap.appendChild(modelLabel);
+    wrap.appendChild(modelInput);
+    wrap.appendChild(modelHelp);
+    anchor.appendChild(wrap);
+  }
+
+  // Re-check on every DOM mutation so we catch React route transitions.
+  var __cookerMo = null;
+  function startCookerExtraWatcher() {
+    if (__cookerMo) return;
+    __cookerMo = new MutationObserver(function () {
+      try {
+        watchVisitSelector();
+        ensureCookerExtraUi();
+      } catch (e) {}
+    });
+    __cookerMo.observe(document.body, { childList: true, subtree: true });
+  }
+  if (document.body) startCookerExtraWatcher();
+  else window.addEventListener("DOMContentLoaded", startCookerExtraWatcher);
+
+  // Splice Type / Model lines into the APPLIANCE 2 block of an outgoing body.
+  function injectCookerExtraIntoBody(body) {
+    if (!body || typeof body !== "string") return body;
+    var extra = readCookerExtraFromStorage();
+    var type = (extra.type || "").trim();
+    var model = (extra.model || "").trim() || "NA";
+    // Find APPLIANCE 2 block.
+    var lines = body.split(/\r?\n/);
+    var i = lines.findIndex(function (l) { return l.trim() === "APPLIANCE 2"; });
+    if (i < 0) return body; // No APPLIANCE 2 — visit 1 or no cooker. Leave body alone.
+    // Skip past dashed underline if present.
+    var insertAt = i + 1;
+    if (insertAt < lines.length && /^-+$/.test(lines[insertAt].trim())) insertAt++;
+    // Replace any existing Type:/Model: lines in this block first — don't double up.
+    var blockEnd = insertAt;
+    while (blockEnd < lines.length && lines[blockEnd].trim() !== "" && !/^=+$/.test(lines[blockEnd].trim())) blockEnd++;
+    var blockLines = lines.slice(insertAt, blockEnd).filter(function (l) {
+      return !/^Type:/i.test(l.trim()) && !/^Model:/i.test(l.trim());
+    });
+    // Build replacement block: Type and Model first, then the rest.
+    var newBlock = [];
+    if (type) newBlock.push("Type: " + type);
+    newBlock.push("Model: " + model);
+    newBlock = newBlock.concat(blockLines);
+    var out = lines.slice(0, insertAt).concat(newBlock, lines.slice(blockEnd));
+    return out.join("\n");
+  }
+
   // BUG 1 + BUG 3 FIX — synchronous monkey-patch of localStorage.setItem.
   // When React writes citizenGas.queue, we intercept the write AND
   // synchronously harvest photos from the still-mounted review screen.
@@ -1469,6 +1688,28 @@
       let newEntryId = null;
       let photos = [];
       if (isQueueWrite) {
+        // Inject Cooker Type + Model into the body of every queue entry that
+        // has an APPLIANCE 2 block. Re-serialise the queue with the spliced body.
+        try {
+          var parsed = JSON.parse(value || "[]");
+          if (Array.isArray(parsed)) {
+            var changed = false;
+            for (var qi = 0; qi < parsed.length; qi++) {
+              var entry = parsed[qi];
+              if (entry && typeof entry.body === "string" && entry.body.indexOf("APPLIANCE 2") !== -1) {
+                var newBody = injectCookerExtraIntoBody(entry.body);
+                if (newBody !== entry.body) {
+                  entry.body = newBody;
+                  changed = true;
+                }
+              }
+            }
+            if (changed) {
+              value = JSON.stringify(parsed);
+              arguments[1] = value;
+            }
+          }
+        } catch (e) {}
         // Pre-parse the new value so we know which entry id was just added.
         try {
           const newQ = JSON.parse(value || "[]");

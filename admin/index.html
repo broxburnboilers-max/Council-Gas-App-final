@@ -28,12 +28,9 @@
       @keyframes gs-spin { to { transform: rotate(360deg); } }
       #gs-import-overlay h2 { font-size: 22px; font-weight: 700; margin: 0 0 8px; }
       #gs-import-overlay p { font-size: 14px; color: #cdd5dc; margin: 0; max-width: 320px; line-height: 1.5; }
-      /* Dashboard tiles injected to match React home tiles (New Job / Records / GSC Email) */
-      #gs-extra-tile-row {
-        display: flex; flex-direction: row; justify-content: center;
-        align-items: flex-start; gap: 32px; margin: 24px auto 0;
-        flex-wrap: wrap;
-      }
+      /* Dashboard tiles injected to match React home tiles (New Job / Records / GSC Email).
+         These are appended as direct children of the React tile flex container, so they
+         participate in the same row/gap as the existing tiles. */
       .gs-extra-tile {
         display: flex; flex-direction: column; align-items: center;
         cursor: pointer; user-select: none;
@@ -424,37 +421,44 @@
   const TILE_JOBS_ID = "gs-tile-jobs";
 
   // Find the home dashboard ('What would you like to do?' screen).
-  // Returns the container that holds the React home tiles (New Job / Records /
-  // GSC Email), so we can append our two extra tiles inside it.
+  // Returns the React grid container that directly holds the New Job /
+  // Records / GSC Email tiles, so we can append our two extra tiles as
+  // siblings (same row).
   function findHomeTilesContainer() {
+    // Step 1: locate leaf nodes for each of the three React tiles.
     const all = [...document.querySelectorAll("div, span, h1, h2, h3, p")];
-    let promptEl = null;
-    for (const el of all) {
-      if (el.children.length !== 0) continue;
-      if ((el.textContent || "").trim() === "What would you like to do?") {
-        promptEl = el; break;
+    function leafOf(label) {
+      for (const el of all) {
+        if (el.children.length === 0 && (el.textContent || "").trim() === label) return el;
       }
+      return null;
     }
-    if (!promptEl) return null;
-    // Find the tile labeled 'GSC Email' — it's the last home tile, and its
-    // common ancestor with the prompt is the dashboard container.
-    let gscLabel = null;
-    for (const el of all) {
-      if (el.children.length !== 0) continue;
-      if ((el.textContent || "").trim() === "GSC Email") { gscLabel = el; break; }
+    const leaves = [leafOf("New Job"), leafOf("Records"), leafOf("GSC Email")];
+    if (leaves.some(l => !l)) return null;
+
+    // Step 2: build ancestor chains for each leaf.
+    function chain(el) {
+      const out = [];
+      while (el) { out.push(el); el = el.parentElement; }
+      return out;
     }
-    if (!gscLabel) return null;
-    // Find the tile root (climb until we hit the cursor:pointer ancestor).
-    let gscTile = gscLabel;
-    while (gscTile && gscTile !== document.body) {
-      try {
-        const cs = getComputedStyle(gscTile);
-        if (cs.cursor === "pointer") break;
-      } catch (e) {}
-      gscTile = gscTile.parentElement;
+    const chains = leaves.map(chain);
+
+    // Step 3: find the lowest common ancestor of all three leaves.
+    const setA = new Set(chains[0]);
+    const setB = new Set(chains[1]);
+    let lca = null;
+    for (const node of chains[2]) {
+      if (setA.has(node) && setB.has(node)) { lca = node; break; }
     }
-    if (!gscTile || gscTile === document.body) return null;
-    return gscTile.parentElement; // sibling container of the tiles
+    if (!lca) return null;
+
+    // Sanity: the LCA should be a flex/grid container so siblings line up.
+    try {
+      const cs = getComputedStyle(lca);
+      if (cs.display !== "flex" && cs.display !== "grid" && cs.display !== "inline-flex") return null;
+    } catch (e) { return null; }
+    return lca;
   }
 
   function ensureFileInput() {
@@ -515,30 +519,29 @@
       return;
     }
 
-    // Get-or-create the row wrapper so both tiles sit side-by-side.
-    let row = document.getElementById("gs-extra-tile-row");
-    if (!row) {
-      row = document.createElement("div");
-      row.id = "gs-extra-tile-row";
-      container.appendChild(row);
-    } else if (row.parentElement !== container) {
-      container.appendChild(row);
-    }
+    // Drop any old wrapper from previous deploys.
+    const oldRow = document.getElementById("gs-extra-tile-row");
+    if (oldRow) oldRow.remove();
 
-    // Inject Import Daybook tile if not present.
-    if (!document.getElementById(TILE_DAYBOOK_ID)) {
+    // Inject Import Daybook tile DIRECTLY into the React grid so it becomes
+    // a sibling of New Job / Records / GSC Email — same row, same gap.
+    if (!document.getElementById(TILE_DAYBOOK_ID) || document.getElementById(TILE_DAYBOOK_ID).parentElement !== container) {
+      const old = document.getElementById(TILE_DAYBOOK_ID);
+      if (old) old.remove();
       const tile = buildTile(TILE_DAYBOOK_ID, "Import Daybook", "\u2B07", function () {
         ensureFileInput().click();
       });
-      row.appendChild(tile);
+      container.appendChild(tile);
     }
 
-    // Inject Assign Jobs tile if not present.
-    if (!document.getElementById(TILE_JOBS_ID)) {
+    // Inject Assign Jobs tile as the 5th sibling.
+    if (!document.getElementById(TILE_JOBS_ID) || document.getElementById(TILE_JOBS_ID).parentElement !== container) {
+      const old = document.getElementById(TILE_JOBS_ID);
+      if (old) old.remove();
       const tile = buildTile(TILE_JOBS_ID, "Assign Jobs", "\uD83D\uDCCB", function () {
         window.location.href = "/admin/jobs";
       });
-      row.appendChild(tile);
+      container.appendChild(tile);
     }
   }
 

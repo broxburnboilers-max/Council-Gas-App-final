@@ -694,18 +694,28 @@
     const PDFLib = await loadPdfLib();
     const doc = await PDFLib.PDFDocument.load(basePdfBytes);
     const photos = (record && record.photos) || [];
+    let skippedPhotos = 0;
     for (const ph of photos) {
-      if (!ph || !ph.dataUrl || !ph.dataUrl.startsWith("data:image/")) continue;
+      if (!ph || !ph.dataUrl || !ph.dataUrl.startsWith("data:image/")) {
+        skippedPhotos++; continue;
+      }
       const isPng = ph.dataUrl.indexOf("image/png") !== -1;
       const b64 = ph.dataUrl.split(",")[1];
-      const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+      // Decode base64 — a single bad photo must not crash the whole PDF.
+      let bytes;
+      try {
+        bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+      } catch (decodeErr) {
+        console.warn("Skipping photo " + (ph.label || "?") + ": invalid base64");
+        skippedPhotos++; continue;
+      }
       let img;
       try {
         img = isPng ? await doc.embedPng(bytes) : await doc.embedJpg(bytes);
       } catch (e) {
         // try the other format if guess was wrong
         try { img = isPng ? await doc.embedJpg(bytes) : await doc.embedPng(bytes); }
-        catch (e2) { continue; }
+        catch (e2) { skippedPhotos++; continue; }
       }
       const pageWidth = 595.28, pageHeight = 841.89; // A4 portrait
       const page = doc.addPage([pageWidth, pageHeight]);

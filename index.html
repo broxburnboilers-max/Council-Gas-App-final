@@ -2834,7 +2834,9 @@
       jobCount: (d.certs || []).length,
       noAccessCount: (d.noAccess || []).length,
     };
-    const payload = JSON.stringify({ daybook: forEmail, summary, filename });
+    // BUG-FIX (Photos missing in email): the size shown to the engineer must
+    // reflect the WHOLE payload (including photos) since we now send photos.
+    const payload = JSON.stringify({ daybook: d, summary, filename });
     const sizeKB = Math.round(payload.length / 1024);
 
     // Show a working spinner-ish modal
@@ -2848,11 +2850,23 @@
     let resendOk = false;
     let errMsg = "";
     let bodyText = "";
+
+    // BUG-FIX (Photos missing in email — third attempt, simplest path):
+    // Forget the JSON-attachment route entirely. Send the FULL daybook (photos
+    // included) to /api/send-daybook so the server can attach photos directly
+    // to the Resend email AND embed them inline in the HTML body. The user
+    // will SEE photos in the email itself — no JSON unzip needed.
+    var fullPayload = JSON.stringify({
+      daybook: d, // <-- photos intact, NOT stripped
+      summary: summary,
+      filename: filename,
+    });
+
     try {
       const resp = await fetch("/api/send-daybook", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: payload,
+        body: fullPayload,
         // keepalive lets Safari finish the request even if the page is closing
         keepalive: true,
       });

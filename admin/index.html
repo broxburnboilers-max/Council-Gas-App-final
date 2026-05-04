@@ -925,6 +925,67 @@
     return await doc.save();
   }
 
+  // ---------- VISIT BADGE INJECTION ----------
+  // The user wants a bold black "Visit 1" / "Visit 2" line on the gas-safety
+  // cert preview, placed directly under "Certificate No: <ref>" in the top
+  // right of the cert. The bundle's React component doesn't render this, so
+  // we inject it into the DOM whenever the cert preview is mounted. Both the
+  // visible preview AND the html2canvas snapshot pick it up.
+  function ensureVisitBadge() {
+    try {
+      // Find every element whose visible text begins with "Certificate No.".
+      // The cert preview has multiple cert-No labels (a small light-grey
+      // "Certificate No." caption plus a boxed certRef beneath it). We want
+      // the boxed container that holds the certRef value, and we attach the
+      // visit badge as a sibling directly under it.
+      const allDivs = document.querySelectorAll("div");
+      for (const lab of allDivs) {
+        // The caption "Certificate No." is its own div, fontSize:8, color:#555.
+        const txt = (lab.textContent || "").trim();
+        if (txt !== "Certificate No.") continue;
+        // The next sibling is the boxed div containing the certRef.
+        const certRefBox = lab.nextElementSibling;
+        if (!certRefBox || certRefBox.tagName !== "DIV") continue;
+        // Skip if we've already injected here.
+        if (certRefBox.nextElementSibling &&
+            certRefBox.nextElementSibling.classList.contains("cg-visit-badge")) continue;
+        // Determine the visit number for the active cert preview record.
+        const visit = getVisitNumberForActivePreview(certRefBox);
+        if (!visit || (visit !== 1 && visit !== 2)) continue;
+        // Build the badge.
+        const badge = document.createElement("div");
+        badge.className = "cg-visit-badge";
+        badge.textContent = "Visit " + visit;
+        badge.style.cssText =
+          "font-size:11px; font-weight:900; color:#000; " +
+          "text-align:center; margin-top:4px; letter-spacing:0.5px;";
+        certRefBox.insertAdjacentElement("afterend", badge);
+      }
+    } catch (e) {
+      // Best-effort — never break the admin app over a badge.
+    }
+  }
+
+  function getVisitNumberForActivePreview(certRefBox) {
+    // The certRef shown in the preview maps to a record in gsc_records.
+    const ref = (certRefBox.textContent || "").trim();
+    if (!ref) return null;
+    let recs = [];
+    try { recs = JSON.parse(localStorage.getItem("gsc_records") || "[]"); } catch (e) { return null; }
+    // Find the most recent record whose certRef matches.
+    for (let i = recs.length - 1; i >= 0; i--) {
+      const r = recs[i];
+      if (!r || !r.certData) continue;
+      if ((r.certData.certRef || "").trim() === ref) {
+        const v = r.certData.visit;
+        if (typeof v === "number") return v;
+        if (typeof v === "string") return parseInt(v, 10) || null;
+        return null;
+      }
+    }
+    return null;
+  }
+
   // Hijack the bundle's "Download PDF" button so EVERY cert PDF includes
   // photos as additional pages whenever the active record has any.
   // The bundle's default save produces a single-page landscape A4 with no
@@ -1181,12 +1242,17 @@
     // mid-session (e.g. via GSC Email parse).
     setInterval(autoFolderAllRecords, 3000);
     // Watch for screen changes — re-add the dashboard tiles when home is shown,
-    // remove them when navigating away. Also handles the cert-preview photo btn.
+    // remove them when navigating away. Also handles the cert-preview photo btn
+    // and the Visit 1/2 badge injection on cert previews.
     const mo = new MutationObserver(() => {
       ensureUi();
       ensurePhotoDownloadBtn();
+      ensureVisitBadge();
     });
     mo.observe(document.body, { childList: true, subtree: true });
+    // Also re-check periodically — html2canvas-driven PDF flows can rerender
+    // without triggering a mutation we observe.
+    setInterval(ensureVisitBadge, 1500);
   });
 })();
 

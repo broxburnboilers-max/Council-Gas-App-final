@@ -172,6 +172,49 @@
     ">Admin</button>
 
     <script>
+    // BUG-FIX (Photo capture loss):
+    // Photos in the engineer SPA flow as React state populated by FileReader.readAsDataURL.
+    // The previous photo harvester scraped <img src="data:image/..."> from the review-screen
+    // DOM at queue-write time. With the auto-skip-review change, the review screen mounts
+    // invisibly and the queue write fires the same React frame that React renders the <img>
+    // tags — synchronously, so the data URLs may not be in DOM at scrape time. Result: 0 photos.
+    //
+    // Fix: bucket every photo at the moment FileReader produces its data URL. This runs
+    // BEFORE the bundle even mounts React, so we capture every photo the engineer ever
+    // takes during the session, regardless of which screen is currently mounted. The
+    // bucket persists across navigation. At queue-write time we drain it (or merge with
+    // any DOM-scraped photos for belt-and-braces).
+    (function installPhotoBucket() {
+      if (window.__cgPhotoBucketInstalled) return;
+      window.__cgPhotoBucketInstalled = true;
+      window.__cgPhotoBucket = window.__cgPhotoBucket || []; // [{dataUrl, capturedAt}]
+      try {
+        var origRead = FileReader.prototype.readAsDataURL;
+        FileReader.prototype.readAsDataURL = function (blob) {
+          var fr = this;
+          fr.addEventListener("load", function () {
+            try {
+              var r = fr.result;
+              if (typeof r === "string" && r.indexOf("data:image/") === 0) {
+                window.__cgPhotoBucket.push({ dataUrl: r, capturedAt: Date.now() });
+                // Cap bucket size — engineer rarely takes more than ~30 photos a day.
+                if (window.__cgPhotoBucket.length > 200) {
+                  window.__cgPhotoBucket.splice(0, window.__cgPhotoBucket.length - 200);
+                }
+              }
+            } catch (e) {}
+          });
+          return origRead.apply(fr, arguments);
+        };
+      } catch (e) {
+        console.warn("[cg] photo bucket install failed", e);
+      }
+      // Reset bucket when daybook is sent + cleared (start fresh next day).
+      window.cgResetPhotoBucket = function () {
+        try { window.__cgPhotoBucket = []; } catch (e) {}
+      };
+    })();
+
     (function () {
       var overlay = document.getElementById("cg-sent-overlay");
       var doneBtn = document.getElementById("cg-sent-done");
@@ -1267,25 +1310,35 @@
   }
 
   // ---------- PHOTO HARVESTER ----------
-  // At the moment 'queued' fires, scrape data: URLs from the review-screen DOM.
-  // The bundle renders thumbnails like:
-  //   <img src="data:image/jpeg;base64,..." alt="..."> with a small label below
-  //   ("Gas works", "Gas isolation", "Cooker capped", "Tightness test", etc.)
+  // BUG-FIX (Photo capture loss):
+  // Two-source harvest. The DOM scrape (legacy) and the global photo bucket
+  // (filled by the FileReader hook in <head>) are MERGED and deduped by
+  // dataUrl. The bucket guarantees we don't miss photos when the auto-skip
+  // review races the React render — those photos are already in the bucket
+  // because FileReader produced them earlier in the engineer flow.
   function harvestPhotosFromReview() {
-    const photos = []; // [{labelKey, dataUrl, addressLine}]
+    const photos = []; // [{label, dataUrl, addr}]
+    const seen = Object.create(null);
+
+    // Source 1: DOM <img src="data:image/..."> (label + addr available here).
     const imgs = document.querySelectorAll("img");
     imgs.forEach(img => {
       const src = img.getAttribute("src") || "";
       if (!src.startsWith("data:image/")) return;
-      // Find the nearest text label.
+      if (seen[src]) return;
+      seen[src] = true;
       let label = "";
       const parent = img.closest("div");
       if (parent) {
         const txt = (parent.textContent || "").trim().toLowerCase();
         if (txt.length < 80) label = txt;
       }
-      // Find the property heading nearest above (e.g. "1 Pass Lane, ...").
-      // The review screen lists properties; each property has a heading.
+      // Also try data-testid for label (more reliable than text).
+      if (!label) {
+        const t = img.getAttribute("data-testid") || "";
+        const m = t.match(/img-review-([a-z-]+?)(?:-\d+)?$/i);
+        if (m) label = m[1].replace(/-/g, " ");
+      }
       let addr = "";
       let walker = img.parentElement;
       for (let depth = 0; depth < 12 && walker; depth++) {
@@ -1295,6 +1348,20 @@
       }
       photos.push({ label, dataUrl: src, addr });
     });
+
+    // Source 2: global photo bucket (FileReader-hooked). Photos here have no
+    // DOM context (label/addr) so we tag them as "capture" — the admin PDF
+    // generator already labels them as "Photo N" if no label is set.
+    try {
+      const bucket = (window.__cgPhotoBucket || []);
+      bucket.forEach(p => {
+        if (!p || !p.dataUrl) return;
+        if (seen[p.dataUrl]) return;
+        seen[p.dataUrl] = true;
+        photos.push({ label: "capture", dataUrl: p.dataUrl, addr: "" });
+      });
+    } catch (e) {}
+
     return photos;
   }
 
@@ -1341,6 +1408,7 @@
       certDate,
     });
 
+    const visitNumForCert = (typeof prop.visit === "number" && prop.visit) || parseInt(prop.visit || "1", 10) || 1;
     const certData = Object.assign({}, DEFAULT_CLIENT, {
       certRef: prop.certRef,
       instName: "The Tenant",
@@ -1349,6 +1417,10 @@
       instAddr3: "",
       instPostcode: prop.postcode || "",
       instTel: "NA",
+      // BUG-FIX (Visit badge on PDF): persist the visit number so the admin
+      // cert preview can render a bold "Visit 1" / "Visit 2" label under the
+      // Certificate No. on the PDF.
+      visit: visitNumForCert,
     });
 
     // Translate parsed appliances into the admin's wide record shape
@@ -2164,6 +2236,8 @@
       try { localStorage.removeItem("citizenGas.daybookProcessed"); } catch (e) {}
       try { localStorage.removeItem("citizenGas.queue"); } catch (e) {}
       try { localStorage.removeItem("citizenGas.daybookPhotoPin"); } catch (e) {}
+      // Reset the in-memory photo bucket so tomorrow starts fresh.
+      try { if (typeof window.cgResetPhotoBucket === "function") window.cgResetPhotoBucket(); } catch (e) {}
       refreshDaybookButton();
       showStatusModal({
         title: "Sent \u2713",

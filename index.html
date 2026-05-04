@@ -1452,7 +1452,10 @@
       // material per line or as "<qty> x <item>" / bullet style. We normalise
       // by stripping leading bullets/dashes/numbering.
       materialsBlock.split(/\r?\n/).forEach(function (ln) {
-        var t = ln.replace(/^\s*[-*•\d]+[\.\)]?\s*/, "").trim();
+        // Strip ONLY leading bullet markers: "- ", "* ", "• ",
+        // and numbered list markers like "1. " or "1) " — but NEVER strip
+        // a bare leading digit (e.g. "1 x Gas hose" must stay intact).
+        var t = ln.replace(/^\s*([-*•]|\d+[\.\)])\s+/, "").trim();
         if (t) materialsList.push(t);
       });
     }

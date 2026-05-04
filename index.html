@@ -302,21 +302,18 @@
           }
           return;
         }
-        // Legacy path (single-job 'Sent' overlay) — clear and bounce.
+        // Legacy path (single-job 'Sent' overlay) — just dismiss.
+        //
+        // BUG-FIX (Visit-1 / Visit-2 capture loss):
+        // Previously this branch wiped most citizenGas.* localStorage keys
+        // (everything except engineerProfile and queue). That included
+        // citizenGas.daybook — so if this branch ever fired between cert
+        // sends, the engineer's already-captured certs would silently
+        // disappear. We now leave per-day state alone here. The proper
+        // end-of-day clear happens in actuallySendDaybook after a
+        // successful email.
         overlay.classList.remove("show");
         pushLatestToCloud(); // best-effort retry
-        try {
-          Object.keys(localStorage).forEach(function (k) {
-            if (k.indexOf("citizenGas.") === 0
-              && k !== "citizenGas.engineerProfile"
-              && k !== "citizenGas.queue") {
-              localStorage.removeItem(k);
-            }
-          });
-          // Clear the fresh-signin flag so they land on sign-in, not jobs.
-          sessionStorage.removeItem("citizenGas.signinFresh");
-        } catch (e) {}
-        window.location.href = "/";
       });
 
       // ── In-app admin chip → same gated path as the sign-in admin chip ──
@@ -1518,8 +1515,22 @@
   // the DOM may be gone.
   function ingestQueueItem(item, photos, profile) {
     if (!item || !item.id) return false;
+    // BUG-FIX (Visit-1 / Visit-2 / no-access capture loss):
+    //
+    // We used to block reprocessing on `processed[item.id]`. That made the
+    // pipeline fragile: any path that wiped the daybook (legacy doneBtn,
+    // accidental midnight-rollover archive, manual cleanup) but left the
+    // `processed` map intact would silently lose certs forever — re-sweeps
+    // would skip the queue entry and the cert never reappeared.
+    //
+    // New approach: ALWAYS re-parse and re-merge. The dedup by
+    // certRef|workDate inside the cert merge is idempotent, so reprocessing
+    // is safe. We still write `processed` to record what we've seen (for
+    // diagnostics and photo-pin cleanup), but we no longer use it to gate
+    // ingestion. This means: if the daybook is empty when finishDay reads
+    // it, the queue entries get re-ingested and the certs reappear.
     const processed = readProcessed();
-    if (processed[item.id]) return false;
+    const alreadyProcessed = !!processed[item.id];
 
     const properties = parseDaybookBody(item.body || "");
     if (!properties.length) {
@@ -1550,12 +1561,20 @@
     properties.forEach(function (prop) {
       prop._singleSend = singleSend;
       if (prop.noAccess) {
-        daybook.noAccess.push({
-          address1: prop.address1,
-          address2: prop.address2,
-          postcode: prop.postcode,
-          date: prop.date || todayStamp(),
+        // BUG-FIX: Dedup no-access entries by address1+postcode+date so
+        // re-ingesting the same queue entry doesn't pile up duplicates.
+        var naKey = (prop.address1 || "") + "|" + (prop.postcode || "") + "|" + (prop.date || "");
+        var alreadyHave = daybook.noAccess.some(function (n) {
+          return ((n.address1 || "") + "|" + (n.postcode || "") + "|" + (n.date || "")) === naKey;
         });
+        if (!alreadyHave) {
+          daybook.noAccess.push({
+            address1: prop.address1,
+            address2: prop.address2,
+            postcode: prop.postcode,
+            date: prop.date || todayStamp(),
+          });
+        }
       } else {
         const rec = buildRecord(prop, profile, photos);
         // BUG 1 FIX: De-dup by certRef + work-date so two visits to the same
@@ -1574,15 +1593,11 @@
     writeDaybook(daybook);
     processed[item.id] = { at: Date.now(), parsed: properties.length, photoCount: (photos || []).length };
     writeProcessed(processed);
-    // Free the pinned photos for this entry — they're now persisted in
-    // the daybook and the photo pin can be hefty.
-    try {
-      const pin = readPhotoPin();
-      if (pin[item.id]) {
-        delete pin[item.id];
-        writePhotoPin(pin);
-      }
-    } catch (e) {}
+    // BUG-FIX: Do NOT free the photo pin here. We now allow re-ingestion
+    // of any queue entry (in case the daybook was wiped between sends),
+    // and re-ingestion needs the photos. The pin is cleared only when the
+    // daybook is successfully emailed (actuallySendDaybook clears the
+    // queue + pin together).
     return true;
   }
 
@@ -1924,9 +1939,13 @@
         } catch (e) {}
       }
       if (isQueueWrite) {
-        Promise.resolve().then(function () {
-          try { sweepQueue(photos); } catch (e) { console.error("daybook sweep failed", e); }
-        });
+        // BUG-FIX: Run sweepQueue SYNCHRONOUSLY here. The microtask
+        // version was racy — if React (or any other write) re-entered
+        // localStorage.setItem before our microtask ran, we could see
+        // intermediate or wiped state. Direct sync ingestion guarantees
+        // every queue write lands in the daybook before this setItem
+        // returns to the caller.
+        try { sweepQueue(photos); } catch (e) { console.error("daybook sweep failed", e); }
       }
       return ret;
     };
@@ -2053,6 +2072,24 @@
     // Safety sweep: drain any unsaved queue entries into the daybook before
     // we read it. Covers cases where the queued-event listener missed firing
     // (tab backgrounded, race, etc.).
+    //
+    // BUG-FIX (Visit-1 / Visit-2 capture loss):
+    // The single sweep above is not enough. If the daybook was wiped at any
+    // point during the day (legacy doneBtn, midnight rollover, manual
+    // intervention) but the queue is still intact, the cert bodies are
+    // still recoverable from the queue. We now FORCE a recovery sweep
+    // here: wipe the processed-flag map first so every queue entry is
+    // re-ingested, then run the sweep. The dedup inside ingestQueueItem
+    // makes this safe even if some certs are already in the daybook.
+    try {
+      var queueLen = JSON.parse(localStorage.getItem("citizenGas.queue") || "[]").length;
+      if (queueLen > 0) {
+        // Clear processed flags so reingestion is unconditional. The
+        // ingestQueueItem dedup logic (by certRef|date for certs, by
+        // address+postcode+date for no-access) is idempotent.
+        try { localStorage.removeItem("citizenGas.daybookProcessed"); } catch (e) {}
+      }
+    } catch (e) {}
     try { captureLatestQueue(); } catch (e) {}
     const d = readDaybook();
     const certCount = (d.certs || []).length;

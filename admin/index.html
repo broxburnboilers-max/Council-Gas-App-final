@@ -7,6 +7,58 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>Gas Safety – Admin</title>
+    <!-- Pre-React auto-folder sweeper. Runs synchronously BEFORE the React
+         module loads, so that by the time the bundle reads gsc_records into
+         its in-memory state, every record already has a gscFolder pointing
+         at a folder named after its issue date (DD/MM/YYYY). -->
+    <script>
+      (function () {
+        function fmtDate(raw) {
+          var d = new Date(raw);
+          if (isNaN(d.getTime())) {
+            var m = String(raw).match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+            if (m) return String(raw).slice(0, 10);
+            d = new Date();
+          }
+          var dd = String(d.getUTCDate()).padStart(2, "0");
+          var mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+          var yy = d.getUTCFullYear();
+          return dd + "/" + mm + "/" + yy;
+        }
+        function dateOf(rec) {
+          return (rec && rec.certData && rec.certData.issueDate)
+              || (rec && rec.certData && rec.certData.inspectionDate)
+              || (rec && rec.signatureData && rec.signatureData.issuedByDate)
+              || (rec && rec.savedAt)
+              || new Date().toISOString();
+        }
+        try {
+          var recs = JSON.parse(localStorage.getItem("gsc_records") || "[]");
+          var folders = JSON.parse(localStorage.getItem("gsc_folders") || "[]");
+          if (!Array.isArray(recs) || !Array.isArray(folders)) return;
+          var changed = false;
+          for (var i = 0; i < recs.length; i++) {
+            var r = recs[i];
+            if (!r || r.gscFolder) continue;
+            var name = fmtDate(dateOf(r));
+            var f = folders.find(function (x) { return x && x.name === name; });
+            var fid;
+            if (f) {
+              fid = f.id;
+            } else {
+              fid = "f_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6);
+              folders.push({ id: fid, name: name });
+            }
+            r.gscFolder = fid;
+            changed = true;
+          }
+          if (changed) {
+            localStorage.setItem("gsc_records", JSON.stringify(recs));
+            localStorage.setItem("gsc_folders", JSON.stringify(folders));
+          }
+        } catch (e) { /* never block boot */ }
+      })();
+    </script>
     <script type="module" crossorigin src="./assets/index-Zyqhj0a4.js"></script>
     <style>
       #gs-import-overlay {

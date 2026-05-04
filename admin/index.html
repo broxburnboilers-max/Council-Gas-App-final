@@ -933,24 +933,28 @@
   // visible preview AND the html2canvas snapshot pick it up.
   function ensureVisitBadge() {
     try {
-      // Find every element whose visible text begins with "Certificate No.".
-      // The cert preview has multiple cert-No labels (a small light-grey
-      // "Certificate No." caption plus a boxed certRef beneath it). We want
-      // the boxed container that holds the certRef value, and we attach the
-      // visit badge as a sibling directly under it.
+      // The cert preview top-right has three stacked single-line divs:
+      //   1) "Certificate Reference"  (caption, fontSize:8, fontWeight:700)
+      //   2) "<certRef value>"        (boxed value)
+      //   3) "Certificate No: <certRef value>"  (single combined line)
+      // The user wants the Visit badge directly under #3, in bold black.
+      // Find every leaf div whose text begins with "Certificate No:" and inject
+      // a sibling badge after it. The badge is captured by html2canvas into
+      // the Download PDF output automatically.
       const allDivs = document.querySelectorAll("div");
       for (const lab of allDivs) {
-        // The caption "Certificate No." is its own div, fontSize:8, color:#555.
+        if (lab.children && lab.children.length > 0) continue; // leaf only
         const txt = (lab.textContent || "").trim();
-        if (txt !== "Certificate No.") continue;
-        // The next sibling is the boxed div containing the certRef.
-        const certRefBox = lab.nextElementSibling;
-        if (!certRefBox || certRefBox.tagName !== "DIV") continue;
-        // Skip if we've already injected here.
-        if (certRefBox.nextElementSibling &&
-            certRefBox.nextElementSibling.classList.contains("cg-visit-badge")) continue;
+        if (!/^Certificate\s*No\s*[:.]/i.test(txt)) continue;
+        // Skip if badge already injected immediately after.
+        if (lab.nextElementSibling &&
+            lab.nextElementSibling.classList &&
+            lab.nextElementSibling.classList.contains("cg-visit-badge")) continue;
+        // Extract the certRef from the line: "Certificate No: <ref>"
+        const m = txt.match(/^Certificate\s*No\s*[:.]\s*(.+)$/i);
+        const refFromLine = m ? m[1].trim() : "";
         // Determine the visit number for the active cert preview record.
-        const visit = getVisitNumberForActivePreview(certRefBox);
+        const visit = getVisitNumberForActivePreview(refFromLine);
         if (!visit || (visit !== 1 && visit !== 2)) continue;
         // Build the badge.
         const badge = document.createElement("div");
@@ -959,16 +963,18 @@
         badge.style.cssText =
           "font-size:11px; font-weight:900; color:#000; " +
           "text-align:center; margin-top:4px; letter-spacing:0.5px;";
-        certRefBox.insertAdjacentElement("afterend", badge);
+        lab.insertAdjacentElement("afterend", badge);
       }
     } catch (e) {
       // Best-effort — never break the admin app over a badge.
     }
   }
 
-  function getVisitNumberForActivePreview(certRefBox) {
-    // The certRef shown in the preview maps to a record in gsc_records.
-    const ref = (certRefBox.textContent || "").trim();
+  function getVisitNumberForActivePreview(refFromLine) {
+    // The certRef parsed from the "Certificate No: <ref>" line maps to a
+    // record in gsc_records. Fall back to scanning the visible boxed value
+    // if the line-extracted ref is empty.
+    let ref = (refFromLine || "").trim();
     if (!ref) return null;
     let recs = [];
     try { recs = JSON.parse(localStorage.getItem("gsc_records") || "[]"); } catch (e) { return null; }

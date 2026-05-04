@@ -434,20 +434,21 @@
 
       // ---------- VISIT BADGE INJECTION ----------
       // The user wants a bold black "Visit 1" / "Visit 2" line on the gas-safety
-      // cert preview, placed directly under "Certificate No." in the cert
-      // top-right. Same logic as admin/index.html.
+      // cert preview, placed directly under the "Certificate No: <ref>" line
+      // in the cert top-right. Same logic as admin/index.html.
       function ensureVisitBadge() {
         try {
           var allDivs = document.querySelectorAll("div");
           for (var i = 0; i < allDivs.length; i++) {
             var lab = allDivs[i];
+            if (lab.children && lab.children.length > 0) continue; // leaf only
             var txt = (lab.textContent || "").trim();
-            if (txt !== "Certificate No.") continue;
-            var certRefBox = lab.nextElementSibling;
-            if (!certRefBox || certRefBox.tagName !== "DIV") continue;
-            if (certRefBox.nextElementSibling &&
-                certRefBox.nextElementSibling.classList.contains("cg-visit-badge")) continue;
-            var ref = (certRefBox.textContent || "").trim();
+            if (!/^Certificate\s*No\s*[:.]/i.test(txt)) continue;
+            if (lab.nextElementSibling &&
+                lab.nextElementSibling.classList &&
+                lab.nextElementSibling.classList.contains("cg-visit-badge")) continue;
+            var m = txt.match(/^Certificate\s*No\s*[:.]\s*(.+)$/i);
+            var ref = m ? m[1].trim() : "";
             if (!ref) continue;
             var visit = lookupVisitForRef(ref);
             if (!visit || (visit !== 1 && visit !== 2)) continue;
@@ -457,7 +458,7 @@
             badge.style.cssText =
               "font-size:11px; font-weight:900; color:#000; " +
               "text-align:center; margin-top:4px; letter-spacing:0.5px;";
-            certRefBox.insertAdjacentElement("afterend", badge);
+            lab.insertAdjacentElement("afterend", badge);
           }
         } catch (e) {}
       }

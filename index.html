@@ -301,10 +301,16 @@
       // compressed they're typically 300-500 KB. That keeps the daily email
       // well under Resend's 40 MB envelope cap even with 40+ photos.
       // If compression fails for any reason we fall back to the raw data URL.
+      // NOTE on aggressive sizing:
+      // Netlify Functions cap each request body at ~6 MB. Resend's envelope
+      // cap is 40 MB. Netlify's cap is the binding one, so we target ~120 KB
+      // per photo to comfortably fit 40 photos (≈ 5 MB) in one request.
+      // 1280px on the long edge at JPEG q=0.72 typically lands at 80-150 KB
+      // for phone photos and is still very readable on screen.
       function compressDataUrl(dataUrl, cb) {
         try {
-          var MAX_EDGE = 2048;
-          var QUALITY = 0.82;
+          var MAX_EDGE = 1280;
+          var QUALITY = 0.72;
           var img = new Image();
           img.onload = function () {
             try {
@@ -339,9 +345,9 @@
         for (var i = 0; i < b.length; i++) {
           if (b[i] && b[i].dataUrl === dataUrl) return;
         }
-        // If the photo is small enough already (<200KB) skip compression to
+        // If the photo is small enough already (<150KB) skip compression to
         // save CPU. Otherwise downscale before storing.
-        if (dataUrl.length < 200 * 1024) {
+        if (dataUrl.length < 150 * 1024) {
           window.__cgPhotoBucket.push({ dataUrl: dataUrl, capturedAt: Date.now() });
           return;
         }

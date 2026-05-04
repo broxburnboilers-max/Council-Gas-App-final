@@ -1331,6 +1331,16 @@
   // Records the queue ids we've already processed into the daybook, so we
   // never double-process and never lose entries.
   const PROCESSED_KEY = "citizenGas.daybookProcessed";
+  // Photo pin: maps queue entry id → array of photos harvested at the
+  // moment that entry was created. Survives across reloads.
+  const PHOTO_PIN_KEY = "citizenGas.daybookPhotoPin";
+  function readPhotoPin() {
+    try { return JSON.parse(localStorage.getItem(PHOTO_PIN_KEY) || "{}"); }
+    catch (e) { return {}; }
+  }
+  function writePhotoPin(map) {
+    try { localStorage.setItem(PHOTO_PIN_KEY, JSON.stringify(map)); } catch (e) {}
+  }
   function readProcessed() {
     try { return JSON.parse(localStorage.getItem(PROCESSED_KEY) || "{}"); }
     catch (e) { return {}; }
@@ -1400,6 +1410,15 @@
     writeDaybook(daybook);
     processed[item.id] = { at: Date.now(), parsed: properties.length, photoCount: (photos || []).length };
     writeProcessed(processed);
+    // Free the pinned photos for this entry — they're now persisted in
+    // the daybook and the photo pin can be hefty.
+    try {
+      const pin = readPhotoPin();
+      if (pin[item.id]) {
+        delete pin[item.id];
+        writePhotoPin(pin);
+      }
+    } catch (e) {}
     return true;
   }
 
@@ -1410,18 +1429,24 @@
 
   // Walk the entire queue and ingest any unprocessed entries. Used as a
   // safety-net sweep on event, on a polling interval, and on finishDay.
-  // photos must be the ALREADY-HARVESTED snapshot; if older entries are
-  // unprocessed and the DOM no longer has their photos, they get [].
+  // For each queue entry, photos come from PHOTO_PIN_KEY (pinned at the
+  // moment that entry was added). Falls back to latestPhotos for the last
+  // entry if no pin exists (legacy / event-only path).
   function sweepQueue(latestPhotos) {
     let queue = [];
     try { queue = JSON.parse(localStorage.getItem("citizenGas.queue") || "[]"); }
     catch (e) { return 0; }
     if (!queue.length) return 0;
     const profile = getCurrentProfile();
+    const pin = readPhotoPin();
     let count = 0;
     queue.forEach(function (item, idx) {
-      // Only the last queue entry can be matched to currently-mounted photos.
-      const photos = (idx === queue.length - 1) ? (latestPhotos || []) : [];
+      let photos = [];
+      if (item && item.id && pin[item.id] && Array.isArray(pin[item.id])) {
+        photos = pin[item.id];
+      } else if (idx === queue.length - 1 && latestPhotos && latestPhotos.length) {
+        photos = latestPhotos;
+      }
       if (ingestQueueItem(item, photos, profile)) count++;
     });
     if (count) refreshDaybookButton();
@@ -1429,22 +1454,42 @@
   }
 
   // BUG 1 + BUG 3 FIX — synchronous monkey-patch of localStorage.setItem.
-  // When React writes citizenGas.queue, we intercept BEFORE the write
-  // completes, harvest photos from the still-mounted review screen, and
-  // then process the new entry. This is the only point where we are
-  // guaranteed the photos are still in the DOM.
+  // When React writes citizenGas.queue, we intercept the write AND
+  // synchronously harvest photos from the still-mounted review screen.
+  // The photos are pinned to the SPECIFIC queue entry id that was just
+  // appended, so that even if multiple sends happen in rapid succession,
+  // each entry gets the photos that were in the DOM at its own send moment.
   (function patchSetItem() {
     if (window.__cgDaybookPatched) return;
     window.__cgDaybookPatched = true;
     const origSet = Storage.prototype.setItem;
     Storage.prototype.setItem = function (key, value) {
-      const ret = origSet.apply(this, arguments);
-      if (this === window.localStorage && key === "citizenGas.queue") {
-        // Harvest photos NOW, while the review screen is still mounted.
-        let photos = [];
+      // Re-entrancy guard: don't recurse when we write the photo pin.
+      const isQueueWrite = (this === window.localStorage && key === "citizenGas.queue");
+      let newEntryId = null;
+      let photos = [];
+      if (isQueueWrite) {
+        // Pre-parse the new value so we know which entry id was just added.
+        try {
+          const newQ = JSON.parse(value || "[]");
+          if (Array.isArray(newQ) && newQ.length) {
+            newEntryId = (newQ[newQ.length - 1] || {}).id || null;
+          }
+        } catch (e) {}
         try { photos = harvestPhotosFromReview(); } catch (e) {}
-        // Defer ingestion to a microtask so the value is fully written and
-        // we don't reenter setItem from inside our own write.
+      }
+      const ret = origSet.apply(this, arguments);
+      if (isQueueWrite && newEntryId && photos.length) {
+        // Pin the photos to this specific queue id, so the sweep can
+        // attach them even if a later send already fired before our
+        // microtask ran.
+        try {
+          const pin = readPhotoPin();
+          pin[newEntryId] = photos;
+          writePhotoPin(pin);
+        } catch (e) {}
+      }
+      if (isQueueWrite) {
         Promise.resolve().then(function () {
           try { sweepQueue(photos); } catch (e) { console.error("daybook sweep failed", e); }
         });
@@ -1647,6 +1692,7 @@
       // fresh and the processed map doesn't grow forever.
       try { localStorage.removeItem("citizenGas.daybookProcessed"); } catch (e) {}
       try { localStorage.removeItem("citizenGas.queue"); } catch (e) {}
+      try { localStorage.removeItem("citizenGas.daybookPhotoPin"); } catch (e) {}
       refreshDaybookButton();
       showStatusModal({
         title: "Sent \u2713",

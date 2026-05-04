@@ -1506,13 +1506,35 @@
 
   // Cache the visit number whenever we see the visit selector — lets us
   // determine visit on later pages even after React has navigated away.
+  // The bundle renders two buttons labelled exactly "Visit 1" and "Visit 2";
+  // whichever is currently selected gets the `citizen-gradient-bg` class.
+  // We also accept bare "1"/"2" as a safety net for older builds.
   function watchVisitSelector() {
     try {
-      var btns = document.querySelectorAll('button[class*="citizen-gradient-bg"]');
+      var btns = document.querySelectorAll('button');
+      var sel = null;
       btns.forEach(function (b) {
         var t = (b.textContent || "").trim();
-        if (t === "1" || t === "2") {
-          try { localStorage.setItem("citizenGas.lastVisit", t); } catch (e) {}
+        var hasGrad = /citizen-gradient-bg/.test(b.className || "");
+        if (!hasGrad) return;
+        if (t === "Visit 1" || t === "1") sel = "1";
+        else if (t === "Visit 2" || t === "2") sel = "2";
+      });
+      if (sel) {
+        try { localStorage.setItem("citizenGas.lastVisit", sel); } catch (e) {}
+      }
+      // Also: hook click handlers on Visit 1 / Visit 2 buttons so we capture
+      // the selection the instant the user taps, before React rerenders.
+      btns.forEach(function (b) {
+        if (b.__cgVisitHooked) return;
+        var t = (b.textContent || "").trim();
+        if (t === "Visit 1" || t === "Visit 2") {
+          b.__cgVisitHooked = true;
+          b.addEventListener("click", function () {
+            var v = t === "Visit 2" ? "2" : "1";
+            try { localStorage.setItem("citizenGas.lastVisit", v); } catch (e) {}
+            window.__cgLastVisit = v;
+          }, true);
         }
       });
     } catch (e) {}

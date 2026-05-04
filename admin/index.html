@@ -591,6 +591,38 @@
     ev.target.value = "";
   }
 
+  // Format an ISO/Date string as DD/MM/YYYY for folder names. Falls back to
+  // savedAt if issueDate is missing, then to today.
+  function folderNameForRecord(rec) {
+    const raw =
+      (rec && rec.certData && rec.certData.issueDate) ||
+      (rec && rec.certData && rec.certData.inspectionDate) ||
+      (rec && rec.signatureData && rec.signatureData.issuedByDate) ||
+      (rec && rec.savedAt) ||
+      new Date().toISOString();
+    let d = new Date(raw);
+    if (isNaN(d.getTime())) {
+      // Try DD/MM/YYYY input as-is
+      const m = String(raw).match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+      if (m) return raw.slice(0, 10);
+      d = new Date();
+    }
+    const dd = String(d.getUTCDate()).padStart(2, "0");
+    const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const yy = d.getUTCFullYear();
+    return dd + "/" + mm + "/" + yy;
+  }
+
+  // Look up an existing folder by name, or create one and return its id.
+  // Mutates the folders array in place.
+  function ensureFolder(folders, name) {
+    const found = folders.find(f => f && f.name === name);
+    if (found) return found.id;
+    const id = "f_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6);
+    folders.push({ id: id, name: name });
+    return id;
+  }
+
   function importDaybook(data) {
     if (!data || (!Array.isArray(data.certs) && !Array.isArray(data.noAccess))) {
       showLog("Invalid daybook — no certs/noAccess arrays.", "#c0392b");
@@ -601,9 +633,10 @@
     try { recs = JSON.parse(localStorage.getItem("gsc_records") || "[]"); }
     catch (e) { recs = []; }
 
-    const existingRefs = new Set(
-      recs.map(r => r && r.certData && r.certData.certRef).filter(Boolean)
-    );
+    let folders = [];
+    try { folders = JSON.parse(localStorage.getItem("gsc_folders") || "[]"); }
+    catch (e) { folders = []; }
+    if (!Array.isArray(folders)) folders = [];
 
     let imported = 0, duplicates = 0;
     (data.certs || []).forEach(rec => {
@@ -620,7 +653,18 @@
       const cleaned = Object.assign({}, rec);
       // Ensure id exists (admin ignores it but harmless)
       if (!cleaned.id) cleaned.id = "rec_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7);
+      // ---- Auto-folder by engineer-entered date ----
+      // Each cert is filed into a folder named after its issueDate (DD/MM/YYYY).
+      // If the folder doesn't exist yet, it's created. If the record already has
+      // a manually-set gscFolder, leave it alone (don't override the user's choice
+      // on re-import).
+      if (!cleaned.gscFolder) {
+        const folderName = folderNameForRecord(cleaned);
+        cleaned.gscFolder = ensureFolder(folders, folderName);
+      }
       if (idx >= 0) {
+        // Preserve any manual folder the user has set on the existing record.
+        if (recs[idx] && recs[idx].gscFolder) cleaned.gscFolder = recs[idx].gscFolder;
         recs[idx] = cleaned;
         duplicates++;
       } else {
@@ -640,6 +684,7 @@
     });
 
     try { localStorage.setItem("gsc_records", JSON.stringify(recs)); } catch (e) {}
+    try { localStorage.setItem("gsc_folders", JSON.stringify(folders)); } catch (e) {}
     try { localStorage.setItem(naKey, JSON.stringify(naLog)); } catch (e) {}
 
     return { imported, duplicates, noAccess: naAdded };

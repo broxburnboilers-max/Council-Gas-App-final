@@ -675,6 +675,39 @@
         return origStartJob(job);
       };
 
+      // Track locally-completed jobs for this session so a stale server
+      // response (Netlify Blobs are eventually consistent) can't make the
+      // engineer re-do a job they just finished. Keyed by London-today date
+      // so completions naturally clear at midnight.
+      var COMPLETED_KEY = "citizenGas.completedJobIds";
+      function londonTodayKey() {
+        try {
+          return new Date().toLocaleDateString("en-CA", { timeZone: "Europe/London" });
+        } catch (e) { return new Date().toISOString().slice(0, 10); }
+      }
+      function getCompletedSet() {
+        try {
+          var raw = sessionStorage.getItem(COMPLETED_KEY);
+          if (!raw) return {};
+          var obj = JSON.parse(raw);
+          // Drop entries for any other date — only keep today.
+          var today = londonTodayKey();
+          if (obj.date !== today) return {};
+          return obj.ids || {};
+        } catch (e) { return {}; }
+      }
+      function addCompletedId(id) {
+        if (!id) return;
+        try {
+          var ids = getCompletedSet();
+          ids[id] = 1;
+          sessionStorage.setItem(COMPLETED_KEY, JSON.stringify({
+            date: londonTodayKey(),
+            ids: ids,
+          }));
+        } catch (e) {}
+      }
+
       function markJobCompleteAndContinue() {
         var slotId = "";
         try { slotId = localStorage.getItem(SLOT_KEY_LS) || ""; } catch (e) {}
@@ -686,6 +719,11 @@
         }
         var jobId = lastStartedJobId;
         lastStartedJobId = null;
+
+        // Optimistically record the completion locally BEFORE the server call.
+        // This way even if the POST fails or Blobs is stale, we won't ask the
+        // engineer to re-do this job.
+        if (jobId) addCompletedId(jobId);
 
         // Mark this job complete (best-effort), THEN refetch.
         var done = jobId
@@ -699,7 +737,14 @@
         done.then(function () {
           return fetchPendingJobs();
         }).then(function (jobs) {
-          if (jobs && jobs.length) {
+          // Filter out anything we already completed locally. Protects against
+          // Netlify Blobs eventual-consistency (where a just-deleted job can
+          // still appear in a GET that fires moments after the DELETE/POST).
+          var completedIds = getCompletedSet();
+          var remaining = (jobs || []).filter(function (j) {
+            return !completedIds[j.id];
+          });
+          if (remaining.length) {
             // More to do — return to Today's Jobs without showing the
             // 'Sent' overlay. Bounce React to /#/home so the run-through
             // resets, then re-show the overlay with the updated list.
@@ -710,7 +755,7 @@
             // Allow the React 'Sent' state on /review to clear; re-show overlay.
             setTimeout(function () {
               jobsShownThisSession = false; // allow re-show
-              showJobsOverlay(jobs);
+              showJobsOverlay(remaining);
             }, 350);
           } else {
             showEndOfDayOverlay();
@@ -865,7 +910,14 @@
         if (!slotId) return; // slot wasn't picked — nothing to show
         jobsShownThisSession = true;
         fetchPendingJobs().then(function (jobs) {
-          if (jobs.length) showJobsOverlay(jobs);
+          // Filter out anything we already completed locally this session.
+          var completedIds = (typeof getCompletedSet === "function") ? getCompletedSet() : {};
+          var remaining = (jobs || []).filter(function (j) { return !completedIds[j.id]; });
+          if (remaining.length) showJobsOverlay(remaining);
+          else if ((jobs || []).length) {
+            // Server still has stale entries but everything is locally done.
+            showEndOfDayOverlay();
+          }
         });
       }
 
@@ -1487,6 +1539,9 @@
                 }
               });
               sessionStorage.removeItem("citizenGas.signinFresh");
+              // Clear the per-session 'completed today' tracker so tomorrow
+              // starts fresh.
+              sessionStorage.removeItem("citizenGas.completedJobIds");
             } catch (e) {}
             window.location.href = "/";
           },

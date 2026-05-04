@@ -646,6 +646,42 @@
   // Format an ISO/Date string as DD/MM/YYYY for folder names. Falls back to
   // savedAt if issueDate is missing, then to today.
   function folderNameForRecord(rec) {
+    // PRIORITY ORDER (most-trustworthy first):
+    //   1. engineerData.certDate — the engineer-entered work date (ISO).
+    //      This is the SINGLE SOURCE OF TRUTH for when the gas check was
+    //      actually carried out. Set by buildRecord() on the engineer side
+    //      from prop.date (DD/MM/YYYY entered on the property form).
+    //   2. finalChecks.inspectionDate — the next-inspection-due date (ISO).
+    //      Used as a fallback only — note it's WORK_DATE + 1 YEAR, so we
+    //      subtract a year before using it for the folder name.
+    //   3. certData.issueDate — only present on synthetic/imported records;
+    //      kept for backwards compatibility with old daybook JSONs.
+    //   4. signatureData.issuedByDate / savedAt — last-resort fallbacks.
+    // savedAt is the WORST fallback because the engineer's daybook stamps
+    // it with the moment the queue is swept (today), NOT the work date.
+    const engCertDate = rec && rec.engineerData && rec.engineerData.certDate;
+    if (engCertDate) {
+      const d = new Date(engCertDate);
+      if (!isNaN(d.getTime())) {
+        const dd = String(d.getUTCDate()).padStart(2, "0");
+        const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+        const yy = d.getUTCFullYear();
+        return dd + "/" + mm + "/" + yy;
+      }
+    }
+    const finalChecksInspDate = rec && rec.finalChecks && rec.finalChecks.inspectionDate;
+    if (finalChecksInspDate) {
+      const d = new Date(finalChecksInspDate);
+      if (!isNaN(d.getTime())) {
+        // Inspection date is work-date + 1 year; subtract a year to get
+        // back to the actual work date used for folder grouping.
+        const work = new Date(Date.UTC(d.getUTCFullYear() - 1, d.getUTCMonth(), d.getUTCDate(), 12, 0, 0));
+        const dd = String(work.getUTCDate()).padStart(2, "0");
+        const mm = String(work.getUTCMonth() + 1).padStart(2, "0");
+        const yy = work.getUTCFullYear();
+        return dd + "/" + mm + "/" + yy;
+      }
+    }
     const raw =
       (rec && rec.certData && rec.certData.issueDate) ||
       (rec && rec.certData && rec.certData.inspectionDate) ||
@@ -1031,8 +1067,25 @@
     let changedFolders = false;
     for (var i = 0; i < recs.length; i++) {
       var rec = recs[i];
-      if (!rec || rec.gscFolder) continue;  // already filed
+      if (!rec) continue;
       var name = folderNameForRecord(rec);
+      // If the record is already filed in a folder whose name matches its
+      // computed work-date folder, leave it alone. If the names differ, we
+      // RE-FILE the record into the correct folder. This handles the legacy
+      // case where records were filed into a today-named folder (because
+      // folderNameForRecord used to fall back to savedAt = today) instead
+      // of the engineer-entered work date. Manual user moves are NOT
+      // overridden because we only check the work-date folder name match
+      // against the engineer-entered date — if a record was MANUALLY moved
+      // to a non-date folder, that folder name won't match either, so we'd
+      // re-file it. To preserve manual moves, we only re-file when the
+      // current folder's name parses as DD/MM/YYYY (i.e. a date folder).
+      if (rec.gscFolder) {
+        var currentFolder = folders.find(function (f) { return f && f.id === rec.gscFolder; });
+        if (currentFolder && currentFolder.name === name) continue;  // already correct
+        // If currentFolder's name is NOT a date (manual move), keep it.
+        if (currentFolder && !/^\d{2}\/\d{2}\/\d{4}$/.test(currentFolder.name || "")) continue;
+      }
       var existing = folders.find(function (f) { return f && f.name === name; });
       var fid;
       if (existing) {
@@ -1042,8 +1095,27 @@
         folders.push({ id: fid, name: name });
         changedFolders = true;
       }
-      rec.gscFolder = fid;
-      changedRecs = true;
+      if (rec.gscFolder !== fid) {
+        rec.gscFolder = fid;
+        changedRecs = true;
+      }
+    }
+    // Drop any date-named folder that no longer contains records. Manual
+    // (non-date) folders are kept even if empty so the user's organisation
+    // survives.
+    var usedFolderIds = {};
+    for (var k = 0; k < recs.length; k++) {
+      if (recs[k] && recs[k].gscFolder) usedFolderIds[recs[k].gscFolder] = 1;
+    }
+    var prunedFolders = folders.filter(function (f) {
+      if (!f) return false;
+      var isDateFolder = /^\d{2}\/\d{2}\/\d{4}$/.test(f.name || "");
+      if (!isDateFolder) return true;       // keep manual folders
+      return !!usedFolderIds[f.id];          // drop empty date folders
+    });
+    if (prunedFolders.length !== folders.length) {
+      folders = prunedFolders;
+      changedFolders = true;
     }
     if (changedRecs) { try { localStorage.setItem("gsc_records", JSON.stringify(recs)); } catch (e) {} }
     if (changedFolders) { try { localStorage.setItem("gsc_folders", JSON.stringify(folders)); } catch (e) {} }

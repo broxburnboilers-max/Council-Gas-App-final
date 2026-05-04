@@ -899,9 +899,48 @@
     return jspdfPromise;
   }
 
+  // ---------- AUTO-FOLDER SWEEPER ----------
+  // Catch-all: ensure every record in gsc_records has a gscFolder set to a
+  // date-named folder. This covers ALL ingestion paths (Import Daybook,
+  // GSC Email reply parser, future paths) — not just the importDaybook()
+  // function. Runs on boot and again whenever localStorage changes.
+  function autoFolderAllRecords() {
+    let recs = [];
+    let folders = [];
+    try { recs = JSON.parse(localStorage.getItem("gsc_records") || "[]"); } catch (e) { return; }
+    try { folders = JSON.parse(localStorage.getItem("gsc_folders") || "[]"); } catch (e) { folders = []; }
+    if (!Array.isArray(recs) || !Array.isArray(folders)) return;
+    let changedRecs = false;
+    let changedFolders = false;
+    for (var i = 0; i < recs.length; i++) {
+      var rec = recs[i];
+      if (!rec || rec.gscFolder) continue;  // already filed
+      var name = folderNameForRecord(rec);
+      var existing = folders.find(function (f) { return f && f.name === name; });
+      var fid;
+      if (existing) {
+        fid = existing.id;
+      } else {
+        fid = "f_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6);
+        folders.push({ id: fid, name: name });
+        changedFolders = true;
+      }
+      rec.gscFolder = fid;
+      changedRecs = true;
+    }
+    if (changedRecs) { try { localStorage.setItem("gsc_records", JSON.stringify(recs)); } catch (e) {} }
+    if (changedFolders) { try { localStorage.setItem("gsc_folders", JSON.stringify(folders)); } catch (e) {} }
+    return changedRecs || changedFolders;
+  }
+
   // ---------- BOOT ----------
   window.addEventListener("DOMContentLoaded", function () {
     setTimeout(ensureUi, 400);
+    // First sweep on boot — catches anything imported via legacy paths.
+    setTimeout(autoFolderAllRecords, 600);
+    // Re-sweep every 3s while admin is open — covers records added
+    // mid-session (e.g. via GSC Email parse).
+    setInterval(autoFolderAllRecords, 3000);
     // Watch for screen changes — re-add the dashboard tiles when home is shown,
     // remove them when navigating away. Also handles the cert-preview photo btn.
     const mo = new MutationObserver(() => {

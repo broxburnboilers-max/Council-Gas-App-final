@@ -1673,6 +1673,34 @@
       if (faults.length === 0) {
         faults.push({ details: "No gas supply", remedial: "—", warningNotice: "No" });
       }
+      // BUG-FIX (No-gas property): the cert appliance details table must show
+      // "No gas appliances" at Location 1 instead of being blank, so anyone
+      // reading the cert immediately sees there are no gas appliances.
+      // Replace whatever appliances were parsed (typically none for a no-gas
+      // property) with a single placeholder row at location 1.
+      appliances.length = 0;
+      var noGasRow = naAppliance();
+      noGasRow.location = "Location 1";
+      noGasRow.type = "No gas appliances";
+      noGasRow.make = "N/A";
+      noGasRow.model = "N/A";
+      noGasRow.flueType = "N/A";
+      noGasRow.heatInput = "N/A";
+      noGasRow.operatingPressure = "N/A";
+      noGasRow.co2 = "N/A";
+      noGasRow.co = "N/A";
+      noGasRow.combustion = "N/A";
+      noGasRow.landlordsAppliance = "N/A";
+      noGasRow.applianceInspected = "N/A";
+      noGasRow.applianceSafe = "N/A";
+      noGasRow.safetyDevices = "N/A";
+      noGasRow.ventilation = "N/A";
+      noGasRow.flueVisual = "N/A";
+      noGasRow.fluePerformance = "N/A";
+      noGasRow.spillageTest = "N/A";
+      noGasRow.flueFlow = "N/A";
+      noGasRow.applianceServiced = "N/A";
+      appliances.push(noGasRow);
     } else {
       finalChecks = {
         gasTightness: "YES",

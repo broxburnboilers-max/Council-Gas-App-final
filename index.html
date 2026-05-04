@@ -1231,49 +1231,64 @@
     try { queue = JSON.parse(localStorage.getItem("citizenGas.queue") || "[]"); }
     catch (e) { return; }
     if (!queue.length) return;
-    const latest = queue[queue.length - 1];
-    if (!latest || latest._daybookSaved) return;
 
     let profile = null;
     try { profile = JSON.parse(localStorage.getItem("citizenGas.engineerProfile") || "null"); } catch (e) {}
 
     // Snapshot the photos *now*, before React unmounts the review screen.
+    // (Only relevant for the most-recent entry that triggered the event;
+    // older entries that were missed won't have DOM photos available.)
     const photos = harvestPhotosFromReview();
-
-    // Parse all PROPERTY blocks from the body
-    const properties = parseDaybookBody(latest.body || "");
-    if (!properties.length) return;
 
     const daybook = readDaybook();
     if (!daybook.date) daybook.date = todayStamp();
     daybook.engineer = profile || {};
 
-    properties.forEach(prop => {
-      if (prop.noAccess) {
-        daybook.noAccess = daybook.noAccess || [];
-        daybook.noAccess.push({
-          address1: prop.address1,
-          address2: prop.address2,
-          postcode: prop.postcode,
-          date: prop.date || todayStamp(),
-        });
-      } else {
-        const rec = buildRecord(prop, profile, photos);
-        daybook.certs = daybook.certs || [];
-        // Replace any existing record with the same certRef from today
-        daybook.certs = daybook.certs.filter(r => r.certData.certRef !== rec.certData.certRef);
-        daybook.certs.push(rec);
-      }
+    let touched = false;
+
+    // Walk EVERY unsaved queue item — not just the last one. This is a
+    // safety net for the case where multiple queue pushes happened without
+    // our event listener firing (e.g. tab backgrounded, race condition,
+    // or older saved entries from a previous session-day that never made
+    // it to the daybook).
+    queue.forEach(function (item, idx) {
+      if (!item || item._daybookSaved) return;
+      const properties = parseDaybookBody(item.body || "");
+      if (!properties.length) return;
+
+      // Photos are only safely associated with the LAST queue entry
+      // (the one that fired this event). For older entries, pass [].
+      const isLatest = idx === queue.length - 1;
+      const photosForItem = isLatest ? photos : [];
+
+      properties.forEach(prop => {
+        if (prop.noAccess) {
+          daybook.noAccess = daybook.noAccess || [];
+          daybook.noAccess.push({
+            address1: prop.address1,
+            address2: prop.address2,
+            postcode: prop.postcode,
+            date: prop.date || todayStamp(),
+          });
+        } else {
+          const rec = buildRecord(prop, profile, photosForItem);
+          daybook.certs = daybook.certs || [];
+          // Replace any existing record with the same certRef from today
+          daybook.certs = daybook.certs.filter(r => r.certData.certRef !== rec.certData.certRef);
+          daybook.certs.push(rec);
+        }
+      });
+      touched = true;
     });
+
+    if (!touched) return;
 
     writeDaybook(daybook);
 
-    // Mark the queue entry so we don't double-save.
+    // Mark every queue entry so we don't double-save on a future event.
     try {
       const q2 = JSON.parse(localStorage.getItem("citizenGas.queue") || "[]");
-      for (let i = q2.length - 1; i >= 0; i--) {
-        if (q2[i].id === latest.id) { q2[i]._daybookSaved = true; break; }
-      }
+      q2.forEach(function (it) { if (it) it._daybookSaved = true; });
       localStorage.setItem("citizenGas.queue", JSON.stringify(q2));
     } catch (e) {}
 
@@ -1382,6 +1397,10 @@
   }
 
   async function finishDay() {
+    // Safety sweep: drain any unsaved queue entries into the daybook before
+    // we read it. Covers cases where the queued-event listener missed firing
+    // (tab backgrounded, race, etc.).
+    try { captureLatestQueue(); } catch (e) {}
     const d = readDaybook();
     const certCount = (d.certs || []).length;
     const naCount = (d.noAccess || []).length;

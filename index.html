@@ -796,6 +796,38 @@
         overlay.classList.add("show");
       }
 
+      // ── BUG FIX: hide the end-of-day overlay whenever we're not on /review.
+      //
+      // The overlay is full-screen at z-index:99999 with pointer-events:auto,
+      // so if it gets stuck open while the engineer navigates back to /home
+      // or into a fresh property, every tap they make is intercepted by the
+      // invisible-but-active overlay. That presents as buttons (Cooker / Hob,
+      // Yes / No, Continue, etc.) appearing dead.
+      //
+      // Rule: the overlay is ONLY allowed to be visible on the /review route.
+      // The instant the URL hash changes off /review, hide it. The overlay's
+      // own button (Review and send to admin) lives on /review where this
+      // guard correctly leaves it shown.
+      function hideOverlayWhenOffReview() {
+        try {
+          var h = (location.hash || "").replace(/^#/, "");
+          var onReview = (h === "/review" || h.indexOf("/review") === 0
+                          || location.pathname === "/review");
+          if (!onReview && overlay && overlay.classList.contains("show")) {
+            overlay.classList.remove("show");
+            // Also reset the end-of-day flag so the next end-of-day correctly
+            // re-renders the copy from scratch instead of inheriting stale
+            // state.
+            try { delete doneBtn.dataset.endOfDay; } catch (e) {}
+          }
+        } catch (e) {}
+      }
+      window.addEventListener("hashchange", hideOverlayWhenOffReview);
+      window.addEventListener("popstate", hideOverlayWhenOffReview);
+      // Some React-router navigations don't fire hashchange (replaceState
+      // path), so also poll cheaply.
+      setInterval(hideOverlayWhenOffReview, 500);
+
       window.addEventListener("citizenGas:queued", function () {
         // Defer slightly so React commits its post-send state first.
         setTimeout(markJobCompleteAndContinue, 250);

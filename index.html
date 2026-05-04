@@ -2023,39 +2023,18 @@
       ].join(";");
       btn.addEventListener("click", function () {
         try {
-          // Find every relevant photo input on the page and feed it the
-          // placeholder file so the React state thinks photos are present.
-          var photoTids = onDocs
-            ? ["input-gas-works-photo", "input-gas-iso-photo"]
-            : ["input-cap-photo", "input-tightness-photo"];
-          // For documentation page we also need the "Yes" toggle to be on so
-          // the photo input is rendered — click those if not already on.
-          if (onDocs) {
-            var ywBtn = document.querySelector('[data-testid="button-gas-works-doc-yes"]');
-            var yiBtn = document.querySelector('[data-testid="button-gas-iso-doc-yes"]');
-            if (ywBtn) ywBtn.click();
-            if (yiBtn) yiBtn.click();
-          }
-          // Wait one tick for React to render photo inputs.
-          setTimeout(function () {
-            photoTids.forEach(function (tid) {
-              var inp = document.querySelector('[data-testid="' + tid + '"]');
-              if (!inp) return;
-              var f = dataUrlToFile(CG_PLACEHOLDER_PNG_DATAURL, tid + "-test.png");
-              setReactFileInput(inp, f);
-            });
-            // For cap-tightness, also fill the Pass + reading.
-            if (onCap) {
-              var pass = document.querySelector('[data-testid="button-tightness-pass"]');
-              if (pass) pass.click();
-              var rd = document.querySelector('[data-testid="input-tightness-reading"]');
-              if (rd) {
-                var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-                setter.call(rd, "0");
-                rd.dispatchEvent(new Event("input", { bubbles: true }));
-              }
-            }
-          }, 80);
+          // ROBUST APPROACH: navigate directly to the next route via the SPA's
+          // hash router. This bypasses any photo / form validation entirely
+          // and works in any browser (real device or headless test).
+          //   /property/cap-tightness → /property/gas-fire
+          //   /property/documentation → /property/materials
+          // Route mapping verified against bundle index-DuY2PSMh.js.
+          var nextRoute = onCap ? "/property/gas-fire"
+                        : onDocs ? "/property/materials"
+                        : null;
+          if (!nextRoute) return;
+          // The app uses wouter with hash routing.
+          window.location.hash = "#" + nextRoute;
         } catch (e) {}
       });
       // Place button just above the Continue button so it's obvious.

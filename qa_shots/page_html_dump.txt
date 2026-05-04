@@ -1,0 +1,30 @@
+
+    <div id="root"><div role="region" aria-label="Notifications (F8)" tabindex="-1" style="pointer-events: none;"><ol tabindex="-1" class="fixed top-0 z-[100] flex max-h-screen w-full flex-col-reverse p-4 sm:bottom-0 sm:right-0 sm:top-auto sm:flex-col md:max-w-[420px]"></ol></div><div class="min-h-screen flex flex-col items-center justify-center px-6 py-10 bg-background"><div class="w-full max-w-sm flex flex-col items-center"><img src="https://gasapp.online/assets/citizen-logo-CebQSTm3.jpg" alt="Citizen Gas" class="w-32 h-32 rounded-3xl object-cover shadow-xl mb-6"><h1 class="text-xl font-semibold tracking-tight">Citizen Gas</h1><p class="text-sm text-muted-foreground mt-1 mb-8">Engineer sign-in</p><form class="w-full flex flex-col gap-4" data-testid="form-login"><div class="flex flex-col gap-1.5"><label class="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70" for="fullName">Your name</label><input class="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-base ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 md:text-sm" id="fullName" placeholder="e.g. James Smith" required="" data-testid="input-fullname" autocomplete="name" value="" style=""><p class="text-xs text-muted-foreground mt-1">This will appear on the certificate email.</p></div><div class="flex flex-col gap-1.5"><label class="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70" for="gasSafeRegNo">Gas Safe Registration No</label><input class="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-base ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 md:text-sm" id="gasSafeRegNo" inputmode="numeric" placeholder="e.g. 927997" required="" data-testid="input-gas-safe-reg" value="" style=""><p class="text-xs text-muted-foreground mt-1">Saved on this phone — auto-fills next time.</p></div><div class="flex flex-col gap-1.5"><label class="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70" for="licenceNo">Licence No</label><input class="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-base ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 md:text-sm" id="licenceNo" inputmode="numeric" placeholder="e.g. 5927846" required="" data-testid="input-licence-no" value="" style=""></div><button class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg]:size-4 [&amp;_svg]:shrink-0 hover-elevate active-elevate-2 bg-primary border-primary-border min-h-9 px-4 py-2 mt-2 citizen-gradient-bg text-white border-0 hover:opacity-90" type="submit" disabled="" data-testid="button-login">Continue</button></form></div></div></div>
+
+    <!-- Engineer slot picker (only visible on the sign-in screen) -->
+    <div id="cg-slot-picker" style="display: flex;">
+      <label for="cg-slot-select">Engineer</label>
+      <select id="cg-slot-select"><option value="engineer_1">Richard Dick</option><option value="engineer_2">Jason Test</option><option value="engineer_3">Engineer 3</option></select>
+    </div>
+
+    <!-- Today's Jobs overlay (shown after sign-in if jobs are assigned) -->
+    <div id="cg-jobs-overlay" role="dialog" aria-live="polite">
+      <div class="head">
+        <span style="font-size:28px">📍</span>
+        <div>
+          <h1>Today's Jobs</h1>
+          <p class="who" id="cg-jobs-who">Welcome.</p>
+        </div>
+      </div>
+      <p class="lede">Tap a property below to start the visit. The address will be filled in automatically.</p>
+      <div class="joblist" id="cg-jobs-list"></div>
+      <button class="skip" id="cg-jobs-skip" type="button">Enter address manually</button>
+    </div>
+
+    <!-- Admin shortcut to dashboard (only visible after engineer sign-in) -->
+    <button id="cg-admin-btn" type="button" aria-label="Open admin dashboard" style="display: none;">Admin</button>
+
+    <!-- Sent confirmation overlay (engineer's end-of-flow) -->
+    <div id="cg-sent-overlay" role="dialog" aria-live="polite">
+      <div class="tick">
+        <svg viewBox="0 0 24 24"><polyline 

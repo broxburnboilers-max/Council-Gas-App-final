@@ -1,0 +1,80 @@
+{
+  "id": "rec_GSC_QA_002_1777879335267",
+  "certData": {
+    "clientName": "Citizen Housing Group Ltd",
+    "clientAddr1": "Lakeside",
+    "clientAddr2": "4040 Solihull Pkwy",
+    "clientAddr3": "Birmingham",
+    "clientPostcode": "B37 7YN",
+    "clientTel": "0300 790 6555",
+    "clientEmail": "admin@dsplumbingsolutions.co.uk",
+    "certRef": "GSC-QA-002",
+    "instName": "The Tenant",
+    "instAddr1": "2 Baker Street",
+    "instAddr2": "Broxburn",
+    "instAddr3": "",
+    "instPostcode": "EH52 2BB",
+    "instTel": "07700900001"
+  },
+  "appliances": [
+    {
+      "location": "Living Room",
+      "type": "Gas Fire",
+      "make": "Valor",
+      "model": "Homeflame",
+      "flueType": "RS",
+      "landlordsAppliance": "No",
+      "applianceInspected": "Yes",
+      "co2": "8.5 %",
+      "co": "40 ppm",
+      "combustion": "0.001",
+      "operatingPressure": "18 mbar",
+      "heatInput": "6 kW",
+      "spillageTest": "Pass",
+      "flueFlow": "Pass",
+      "ventilation": "Pass",
+      "flueVisual": "Pass",
+      "fluePerformance": "Pass",
+      "applianceServiced": "No",
+      "applianceSafe": "Yes",
+      "safetyDevices": "Yes"
+    }
+  ],
+  "faults": [],
+  "finalChecks": {
+    "gasTightness": "YES",
+    "pipeworkVisual": "YES",
+    "emergencyControl": "YES",
+    "bonding": "YES",
+    "installationPass": "YES",
+    "coAlarm": "YES",
+    "smokeAlarm": "YES",
+    "inspectionDate": "2027-05-04T00:00:00.000Z"
+  },
+  "signatureData": {
+    "engineerSigImage": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAIAAAAiOjnJAAACJElEQVR4nO3SsQnAMBAEwe+/aasBBTJiMZg5poALdh6zYPP1AfvnhGXJhGXJhGXJhGXJhGXJhGXJhGXJhGXJhGXJDsKagQ1hkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBaJ27DM3k9YlkxYlkxYlkxYlkxYlkxYlkxYlkxYlkxYlmwBRHygSt/pY04AAAAASUVORK5CYII="
+  },
+  "engineerData": {
+    "engineerName": "Test Engineer QA",
+    "gasSafeNo": "1234567",
+    "gasId": "9876543",
+    "companyName": "West Lothian Gas Ltd",
+    "companyAddr": "18 Mauldeth Rd Broxburn",
+    "companyPostcode": "EH52 6FB",
+    "companyTel": "07961768920",
+    "companyEmail": "akingpage@gmail.com",
+    "companyWeb": "www.westlothiangas.com",
+    "certDate": "2026-05-04T07:22:15.267Z"
+  },
+  "photos": [
+    {
+      "label": "gas meter photo",
+      "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAIAAAAiOjnJAAACJElEQVR4nO3SsQnAMBAEwe+/aasBBTJiMZg5poALdh6zYPP1AfvnhGXJhGXJhGXJhGXJhGXJhGXJhGXJhGXJhGXJDsKagQ1hkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBaJ27DM3k9YlkxYlkxYlkxYlkxYlkxYlkxYlkxYlkxYlmwBRHygSt/pY04AAAAASUVORK5CYII="
+    },
+    {
+      "label": "appliance photo",
+      "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAIAAAAiOjnJAAACJElEQVR4nO3SsQnAMBAEwe+/aasBBTJiMZg5poALdh6zYPP1AfvnhGXJhGXJhGXJhGXJhGXJhGXJhGXJhGXJhGXJDsKagQ1hkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBYJYZEQFglhkRAWCWGREBaJ27DM3k9YlkxYlkxYlkxYlkxYlkxYlkxYlkxYlkxYlmwBRHygSt/pY04AAAAASUVORK5CYII="
+    }
+  ],
+  "savedAt": "2026-05-04T07:22:15.267Z"
+}

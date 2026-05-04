@@ -1,0 +1,87 @@
+[
+  {
+    "name": "App loads",
+    "status": "PASS",
+    "detail": "title=Citizen Gas"
+  },
+  {
+    "name": "S1: 1 cert + 0 no-access",
+    "status": "PASS",
+    "detail": "certs=1, noAccess=0"
+  },
+  {
+    "name": "S1: engineerName flows from profile",
+    "status": "PASS",
+    "detail": "Test Engineer"
+  },
+  {
+    "name": "S1: gasSafeNo flows from profile",
+    "status": "PASS",
+    "detail": "1234567"
+  },
+  {
+    "name": "S1: gasId (licenceNo) flows from profile",
+    "status": "PASS",
+    "detail": "9876543"
+  },
+  {
+    "name": "S1: client is Citizen Housing Group Ltd",
+    "status": "PASS",
+    "detail": "Citizen Housing Group Ltd"
+  },
+  {
+    "name": "S1: ON-SITE DOCUMENTATION not in cert record",
+    "status": "PASS",
+    "detail": "clean"
+  },
+  {
+    "name": "S2: 0 cert + 1 no-access",
+    "status": "PASS",
+    "detail": "certs=0, noAccess=1"
+  },
+  {
+    "name": "S2: no-access address captured",
+    "status": "PASS",
+    "detail": "2 Fault Street"
+  },
+  {
+    "name": "S3: 1 cert + 3 no-access (reported failing case)",
+    "status": "PASS",
+    "detail": "certs=1, noAccess=3"
+  },
+  {
+    "name": "S4: 3 certs in a row",
+    "status": "PASS",
+    "detail": "certs=3, noAccess=0"
+  },
+  {
+    "name": "S5: 2 certs + 2 no-access",
+    "status": "PASS",
+    "detail": "certs=2, noAccess=2"
+  },
+  {
+    "name": "S6: _daybookSaved prevents double-save",
+    "status": "FAIL",
+    "detail": "certs=-1, noAccess=-1 (expected 0,0)"
+  },
+  {
+    "name": "S7: send-daybook API returns ok:true",
+    "status": "PASS",
+    "detail": "id=da72914d-b2d1-40ee-ba68-3702fe27691e"
+  },
+  {
+    "name": "S8: #cg-sent-overlay exists in DOM",
+    "status": "PASS",
+    "detail": "{\"exists\":true,\"visible\":false,\"hasButton\":true}"
+  },
+  {
+    "name": "S9: Sign-in screen renders",
+    "status": "PASS",
+    "detail": "inputs=3"
+  },
+  {
+    "name": "S10: duplicate certRef deduplication",
+    "status": "PASS",
+    "detail": "certs=1 (correct — deduped)"
+  }
+]

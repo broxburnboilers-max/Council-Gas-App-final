@@ -1,0 +1,422 @@
+
+    <div id="root"><div style="min-height: 100vh; background: linear-gradient(160deg, rgb(26, 59, 191) 0%, rgb(42, 82, 212) 60%, rgb(26, 59, 191) 100%); display: flex; flex-direction: column; align-items: center; justify-content: center; font-family: &quot;Segoe UI&quot;, sans-serif; padding: 24px;"><div style="background: rgb(255, 255, 255); border-radius: 24px; padding: 40px 32px 36px; width: 100%; max-width: 380px; box-shadow: rgba(0, 0, 0, 0.25) 0px 20px 60px; display: flex; flex-direction: column; align-items: center;"><div style="font-size: 56px; line-height: 1; margin-bottom: 12px;">🔥</div><h1 style="font-size: 24px; font-weight: 800; color: rgb(17, 17, 17); margin: 0px 0px 6px;">Gas Safety</h1><p style="color: rgb(102, 102, 102); font-size: 15px; margin: 0px 0px 2px;">West Lothian Gas Ltd</p><p style="color: rgb(102, 102, 102); font-size: 15px; margin: 0px 0px 28px;">Enter your password to continue</p><div style="position: relative; width: 100%; margin-bottom: 16px;"><input type="password" placeholder="Password" value="Test" style="width: 100%; padding: 16px 50px 16px 18px; border-radius: 12px; border: 2px solid rgb(42, 82, 212); font-size: 16px; color: rgb(17, 17, 17); outline: none; box-sizing: border-box; font-family: inherit;"><button style="position: absolute; right: 14px; top: 50%; transform: translateY(-50%); background: none; border-width: medium; border-style: none; border-color: currentcolor; border-image: initial; cursor: pointer; font-size: 20px; color: rgb(136, 136, 136); padding: 0px;">👁️</button></div><button style="width: 100%; padding: 17px; background: rgb(42, 82, 212); color: rgb(255, 255, 255); border-width: medium; border-style: none; border-color: currentcolor; border-image: initial; border-radius: 12px; font-size: 17px; font-weight: 700; cursor: pointer;">Unlock App</button></div><p style="color: rgba(255, 255, 255, 0.65); font-size: 13px; margin-top: 28px; text-align: center;">West Lothian Gas Ltd · Gas Safe Reg. 5927846</p></div></div>
+
+    <a id="gs-jobs-link" href="/admin/jobs">Assign Jobs</a>
+
+    <div id="gs-import-overlay" role="dialog" aria-live="polite">
+      <div class="spinner"></div>
+      <h2 id="gs-import-title">Importing engineer submissions…</h2>
+      <p id="gs-import-msg">Pulling new visits from the cloud queue.</p>
+    </div>
+
+    <script>
+    (function () {
+      // Auth gate — must come from the engineer sign-in screen's Admin button.
+      try {
+        if (sessionStorage.getItem("gsAdminAuth") !== "1") {
+          // Soft redirect back home if landed here without auth.
+          window.location.href = "/";
+          return;
+        }
+      } catch (e) {}
+
+      var ADMIN_KEY = "Test";
+      try { ADMIN_KEY = sessionStorage.getItem("gsAdminKey") || ADMIN_KEY; } catch (e) {}
+
+      var overlay = document.getElementById("gs-import-overlay");
+      var titleEl = document.getElementById("gs-import-title");
+      var msgEl = document.getElementById("gs-import-msg");
+
+      function show(title, msg) {
+        titleEl.textContent = title;
+        msgEl.textContent = msg;
+        overlay.classList.add("show");
+      }
+      function hide() {
+        overlay.classList.remove("show");
+      }
+
+      // Wait until the React app is mounted enough that we can find the home buttons.
+      function waitFor(predicate, timeoutMs) {
+        return new Promise(function (resolve, reject) {
+          var start = Date.now();
+          var iv = setInterval(function () {
+            var v = predicate();
+            if (v) { clearInterval(iv); resolve(v); }
+            else if (Date.now() - start > timeoutMs) { clearInterval(iv); reject(new Error("timeout")); }
+          }, 80);
+        });
+      }
+
+      // Find a clickable element by visible text. Bandofmates uses both
+      // <button> elements (tabs, Parse, Import All) and clickable <div>s
+      // with cursor:pointer (the home tiles).
+      function findClickableByText(text) {
+        // 1) Exact match on a real <button>.
+        var btns = document.querySelectorAll("button");
+        for (var i = 0; i < btns.length; i++) {
+          var t = (btns[i].textContent || "").trim();
+          if (t === text) return btns[i];
+        }
+        // 2) Substring match on a <button>.
+        for (var j = 0; j < btns.length; j++) {
+          var t2 = (btns[j].textContent || "").trim();
+          if (t2.indexOf(text) !== -1) return btns[j];
+        }
+        // 3) Leaf element whose text equals `text` — climb to the nearest
+        //    ancestor that actually has a click handler (covers the home tile
+        //    divs, where the onClick is on the wrapper, not the inner span).
+        var all = document.querySelectorAll("div, span, a");
+        for (var k = 0; k < all.length; k++) {
+          var el = all[k];
+          if (el.children.length !== 0) continue;
+          var tt = (el.textContent || "").trim();
+          if (tt !== text) continue;
+          // a) Prefer the closest ancestor with an inline onclick handler.
+          var n = el;
+          while (n && n !== document.body) {
+            if (n.onclick) return n;
+            n = n.parentElement;
+          }
+          // b) Fallback to the closest cursor:pointer ancestor.
+          n = el;
+          while (n && n !== document.body) {
+            try {
+              if (getComputedStyle(n).cursor === "pointer") return n;
+            } catch (e) {}
+            n = n.parentElement;
+          }
+          return el;
+        }
+        return null;
+      }
+      // Back-compat alias.
+      var findButtonByText = findClickableByText;
+
+      function setReactInputValue(el, value) {
+        var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
+        setter.call(el, value);
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+
+      // The deployed bandofmates build no longer shows an Unlock App password
+      // gate — it boots straight to the home screen. We still try briefly in
+      // case a future build re-introduces it, but never block on it.
+      async function unlockReactApp() {
+        try {
+          var unlockBtn = await waitFor(function () {
+            return findClickableByText("Unlock App");
+          }, 1500);
+          var pwInput = document.querySelector('input[type="password"], input[placeholder="Password"]');
+          if (pwInput) {
+            var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+            setter.call(pwInput, ADMIN_KEY);
+            pwInput.dispatchEvent(new Event("input", { bubbles: true }));
+            pwInput.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+          await new Promise(function (r) { setTimeout(r, 100); });
+          unlockBtn.click();
+        } catch (e) {
+          // No lock screen — already on home. Continue.
+        }
+        // In either case, wait for the home tile to appear before proceeding.
+        await waitFor(function () { return findClickableByText("GSC Email"); }, 8000);
+      }
+
+      // Bandofmates uses alert() to announce success and may use confirm() —
+      // suppress both so the import completes silently.
+      try { window.alert = function () {}; } catch (e) {}
+      try { window.confirm = function () { return true; }; } catch (e) {}
+
+      async function autoImport() {
+        // Fetch queued submissions
+        show("Importing engineer submissions…", "Checking the cloud queue.");
+        var items = [];
+        try {
+          var resp = await fetch("/api/submissions", {
+            method: "GET",
+            headers: { "x-admin-key": ADMIN_KEY },
+          });
+          if (!resp.ok) {
+            if (resp.status === 401) {
+              show("Auth failed", "Admin key rejected. Please sign in again.");
+              setTimeout(function () { sessionStorage.removeItem("gsAdminAuth"); window.location.href = "/"; }, 2500);
+              return;
+            }
+            show("Cloud queue unreachable", "Status " + resp.status + ". You can still use the app manually.");
+            setTimeout(hide, 2500);
+            return;
+          }
+          var data = await resp.json();
+          items = (data && data.items) || [];
+        } catch (e) {
+          show("Offline", "Couldn't reach the queue. You can still use the app manually.");
+          setTimeout(hide, 2500);
+          return;
+        }
+
+        if (!items.length) {
+          show("No new submissions", "The queue is empty.");
+          setTimeout(hide, 1500);
+          return;
+        }
+
+        show("Found " + items.length + " submission" + (items.length === 1 ? "" : "s"), "Importing into Gas Safety records…");
+
+        // Concatenate every body. The bandofmates parser handles multiple PROPERTY blocks
+        // separated by newlines, and END OF JOB resets state.
+        var combined = items.map(function (it) {
+          return (it.body || "").trim();
+        }).filter(Boolean).join("\n\nEND OF JOB\n\n");
+
+        // Build a map: certRef → engineer payload, so after Import All we can
+        // override engineerData per-record (Engineer Name + Gas Safe Reg No + Licence No).
+        function extractCertRef(body) {
+          var m = (body || "").match(/^\s*Cert Ref:\s*(.+?)\s*$/m);
+          return m ? m[1].trim() : null;
+        }
+        var engineerByCertRef = {};
+        items.forEach(function (it) {
+          var ref = extractCertRef(it.body);
+          if (ref && it.engineer) engineerByCertRef[ref] = it.engineer;
+        });
+        // Snapshot existing record savedAt's so we can detect freshly-imported records.
+        var preExistingSavedAt = {};
+        try {
+          var preRecs = JSON.parse(localStorage.getItem("gsc_records") || "[]");
+          preRecs.forEach(function (r) { if (r && r.savedAt) preExistingSavedAt[r.savedAt] = true; });
+        } catch (e) {}
+
+        // Drive the UI: unlock → home → GSC Email → Import tab → paste → Parse → Import All
+        try {
+          // 0. Unlock the bandofmates React app first.
+          await unlockReactApp();
+
+          // 1. Click "GSC Email" home tile (it's a div with cursor:pointer).
+          await waitFor(function () { return findClickableByText("GSC Email"); }, 8000);
+          findClickableByText("GSC Email").click();
+
+          // 2. Click "Import Reply" tab
+          await waitFor(function () { return findClickableByText("Import Reply"); }, 4000);
+          findClickableByText("Import Reply").click();
+
+          // 3. Find the textarea and fill it
+          var ta = await waitFor(function () {
+            var els = document.querySelectorAll("textarea");
+            for (var i = 0; i < els.length; i++) {
+              if ((els[i].placeholder || "").indexOf("Paste the completed email reply") !== -1) return els[i];
+            }
+            return null;
+          }, 4000);
+          setReactInputValue(ta, combined);
+
+          // 4. Click Parse Email
+          await new Promise(function (r) { setTimeout(r, 200); });
+          var parseBtn = findClickableByText("Parse Email");
+          if (!parseBtn || parseBtn.disabled) throw new Error("Parse button unavailable");
+          parseBtn.click();
+
+          // 5. Wait for parse to finish, then click the create/import action.
+          //    The bandofmates button label is "✅ Create N Gas Safety Certificates".
+          //    Hunt for it by substring ("Create" + "Certificate") and try a few
+          //    fallbacks before giving up.
+          await new Promise(function (r) { setTimeout(r, 800); });
+          function findCreateBtn() {
+            var btns = document.querySelectorAll("button");
+            for (var i = 0; i < btns.length; i++) {
+              var t = (btns[i].textContent || "").trim();
+              if (t.indexOf("Create") !== -1 && t.indexOf("Certificate") !== -1) return btns[i];
+            }
+            for (var j = 0; j < btns.length; j++) {
+              var t2 = (btns[j].textContent || "").trim();
+              if (/^✅/.test(t2) || t2.toLowerCase().indexOf("create") === 0) return btns[j];
+            }
+            return null;
+          }
+          var importBtn = findCreateBtn();
+          // Wait up to 4s if the parse is still running.
+          if (!importBtn) {
+            try {
+              importBtn = await waitFor(findCreateBtn, 4000);
+            } catch (e) {}
+          }
+          if (!importBtn || importBtn.disabled) {
+            throw new Error("Create button not found after parse");
+          }
+          importBtn.click();
+          // Bandofmates may show a confirm() dialog — we already auto-accepted
+          // any window.confirm via the override below. Wait for the alert and
+          // for the records to land in localStorage.
+          await waitFor(function () {
+            try {
+              var rs = JSON.parse(localStorage.getItem("gsc_records") || "[]");
+              return rs.length > Object.keys(preExistingSavedAt).length;
+            } catch (e) { return false; }
+          }, 8000);
+          await new Promise(function (r) { setTimeout(r, 300); });
+
+          // 5b. Override engineer fields on every freshly-imported record so the
+          // certificate shows the engineer who actually did the visit
+          // (Name + Gas Safe Reg No + Licence No), not the admin's default profile.
+          try {
+            var recs = JSON.parse(localStorage.getItem("gsc_records") || "[]");
+            var changed = false;
+            for (var ri = 0; ri < recs.length; ri++) {
+              var rec = recs[ri];
+              if (!rec || preExistingSavedAt[rec.savedAt]) continue; // skip pre-existing
+              var ref = rec && rec.certData && rec.certData.certRef;
+              var eng = ref ? engineerByCertRef[ref] : null;
+              if (!eng) continue;
+              rec.engineerData = rec.engineerData || {};
+              if (eng.fullName) rec.engineerData.engineerName = eng.fullName;
+              if (eng.gasSafeRegNo) rec.engineerData.gasSafeNo = eng.gasSafeRegNo;
+              if (eng.licenceNo) rec.engineerData.gasId = eng.licenceNo;
+              changed = true;
+            }
+            if (changed) {
+              localStorage.setItem("gsc_records", JSON.stringify(recs));
+            }
+          } catch (e) { /* leave records unchanged on failure */ }
+
+          // 6. Clear the cloud queue (success).
+          await fetch("/api/submissions", {
+            method: "DELETE",
+            headers: { "x-admin-key": ADMIN_KEY },
+          }).catch(function () {});
+
+          show("Done", "Imported " + items.length + " submission" + (items.length === 1 ? "" : "s") + ".");
+          setTimeout(hide, 1200);
+        } catch (e) {
+          show("Auto-import paused", "Found " + items.length + " in queue but the parser screen didn't load in time. The data is still in the textarea — tap Parse Email manually.");
+          setTimeout(hide, 4000);
+        }
+      }
+
+      // Kick off after the bundle has had a moment to mount.
+      window.addEventListener("DOMContentLoaded", function () {
+        /* auto-import disabled — use Import Daybook button instead */
+      });
+    })();
+    </script>
+  
+    <script>
+// =====================================================
+// DAYBOOK IMPORT (admin side)
+// =====================================================
+// Adds an "Import Daybook" floating button and a hidden file picker.
+// On file select, parses the JSON daybook and writes records straight into
+// localStorage["gsc_records"] (bypasses the email parser entirely).
+//
+// Also patches the bundle's "Download PDF" flow so when a record has photos,
+// a multi-page PDF is built (cert page first, then one photo per page).
+
+(function () {
+  const DAYBOOK_BTN_ID = "gs-daybook-import-btn";
+  const DAYBOOK_FILE_ID = "gs-daybook-file";
+  const DAYBOOK_LOG_ID = "gs-daybook-log";
+
+  function ensureUi() {
+    if (document.getElementById(DAYBOOK_BTN_ID)) return;
+
+    const btn = document.createElement("button");
+    btn.id = DAYBOOK_BTN_ID;
+    btn.type = "button";
+    btn.textContent = "Import Daybook";
+    btn.style.cssText = [
+      "position:fixed", "right:16px", "bottom:64px", "z-index:9998",
+      "background:#2a52d4", "color:#fff", "border:0", "border-radius:999px",
+      "padding:12px 18px", "font:800 13px/1 ui-sans-serif,system-ui,sans-serif",
+      "letter-spacing:0.04em", "text-transform:uppercase", "cursor:pointer",
+      "box-shadow:0 4px 16px rgba(42,82,212,0.45)",
+    ].join(";");
+
+    const file = document.createElement("input");
+    file.type = "file";
+    file.id = DAYBOOK_FILE_ID;
+    file.accept = "application/json,.json";
+    file.style.display = "none";
+
+    btn.addEventListener("click", () => file.click());
+    file.addEventListener("change", onFileChosen);
+
+    const log = document.createElement("div");
+    log.id = DAYBOOK_LOG_ID;
+    log.style.cssText = [
+      "position:fixed", "right:16px", "bottom:120px", "z-index:9998",
+      "background:#1a2530", "color:#fff", "border:1px solid #334",
+      "border-radius:12px", "padding:14px 18px", "max-width:340px",
+      "font:600 13px/1.4 ui-sans-serif,system-ui,sans-serif",
+      "display:none", "box-shadow:0 6px 24px rgba(0,0,0,0.4)",
+    ].join(";");
+
+    document.body.appendChild(btn);
+    document.body.appendChild(file);
+    document.body.appendChild(log);
+  }
+
+  function showLog(msg, color) {
+    const el = document.getElementById(DAYBOOK_LOG_ID);
+    if (!el) return;
+    el.textContent = msg;
+    el.style.borderColor = color || "#334";
+    el.style.display = "block";
+    clearTimeout(showLog._t);
+    showLog._t = setTimeout(() => { el.style.display = "none"; }, 4500);
+  }
+
+  function onFileChosen(ev) {
+    const f = ev.target.files && ev.target.files[0];
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      let data;
+      try { data = JSON.parse(reader.result); }
+      catch (e) { showLog("Could not parse JSON: " + e.message, "#c0392b"); return; }
+      const result = importDaybook(data);
+      const certs = result.imported || 0;
+      const dups  = result.duplicates || 0;
+      const na    = result.noAccess || 0;
+      let parts = [];
+      parts.push("Imported " + certs + " cert" + (certs === 1 ? "" : "s"));
+      if (dups) parts.push(dups + " skipped (already imported)");
+      if (na) parts.push(na + " no-access logged");
+      showLog(parts.join(" · "), "#2a52d4");
+    };
+    reader.onerror = () => showLog("Could not read file.", "#c0392b");
+    reader.readAsText(f);
+    // Reset input so re-selecting the same file fires change again.
+    ev.target.value = "";
+  }
+
+  function importDaybook(data) {
+    if (!data || (!Array.isArray(data.certs) && !Array.isArray(data.noAccess))) {
+      showLog("Invalid daybook — no certs/noAccess arrays.", "#c0392b");
+      return { imported: 0, duplicates: 0, noAccess: 0 };
+    }
+
+    let recs = [];
+    try { recs = JSON.parse(localStorage.getItem("gsc_records") || "[]"); }
+    catch (e) { recs = []; }
+
+    const existingRefs = new Set(
+      recs.map(r => r && r.certData && r.certData.certRef).filter(Boolean)
+    );
+
+    let imported = 0, duplicates = 0;
+    (data.certs || []).forEach(rec => {
+      if (!rec || !rec.certData || !rec.certData.certRef) return;
+      const ref = rec.certData.certRef;
+      // Replace existing record with same certRef from today, otherwise add.
+      const todayPrefix = (rec.savedAt || "").slice(0, 10);
+      const idx = recs.findIndex(r =>
+        r && r.certData && r.certData.certRef === ref &&
+        ((r.savedAt || "").slice(0, 10) === todayPrefix)
+      );
+      // Make sure record matches admin's expected shape — passes through cleanly
+      // because the engineer side already builds records using the admin schema.
+      const cleaned = Object.assign({}, rec);
+      // Ensure id exists (admin ignores it but harmless)
+      if (!cleaned.id) cleaned.id = "rec_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7);
+      if (idx >= 0) {
+        recs[idx] =

@@ -1,0 +1,10 @@
+{
+  "pass": [
+    "S3: daybook has 1 cert + 3 no-access",
+    "S3: /api/send-daybook returned 200",
+    "S1: engineerData.engineerName matches sign-in",
+    "S1: cert does NOT contain ON-SITE DOCUMENTATION or MATERIALS USED"
+  ],
+  "fail": [],
+  "partial": []
+}

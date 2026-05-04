@@ -1,0 +1,67 @@
+[
+  {
+    "name": "E2E-1: Sign-in form visible",
+    "status": "PASS",
+    "detail": "input found"
+  },
+  {
+    "name": "E2E-1: Sign-in form filled",
+    "status": "PASS",
+    "detail": "name=\"Test Engineer\", gas=\"1234567\", lic=\"9876543\""
+  },
+  {
+    "name": "E2E-1: Continue clicked",
+    "status": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "E2E-1: engineerProfile saved to localStorage",
+    "status": "PASS",
+    "detail": "fullName=\"Test Engineer\""
+  },
+  {
+    "name": "E2E-2: 1 cert + 1 no-access captured",
+    "status": "PASS",
+    "detail": "certs=1, noAccess=1"
+  },
+  {
+    "name": "E2E-2: engineerName on cert",
+    "status": "PASS",
+    "detail": "Test Engineer"
+  },
+  {
+    "name": "E2E-2: gasSafeNo on cert",
+    "status": "PASS",
+    "detail": "1234567"
+  },
+  {
+    "name": "E2E-2: client never changes",
+    "status": "PASS",
+    "detail": "Citizen Housing Group Ltd"
+  },
+  {
+    "name": "E2E-2: property address correct",
+    "status": "PASS",
+    "detail": "5 Multi Way"
+  },
+  {
+    "name": "E2E-2: no-access address correct",
+    "status": "PASS",
+    "detail": "6 Locked Dr"
+  },
+  {
+    "name": "E2E-3: send-daybook API (E2E) ok:true",
+    "status": "PASS",
+    "detail": "id=cab23c74-9594-452b-92ac-e1a5611d56a8"
+  },
+  {
+    "name": "E2E-4: #cg-sent-overlay exists",
+    "status": "PASS",
+    "detail": "h1=\"Sent\""
+  },
+  {
+    "name": "E2E-4: overlay h1 becomes \"All jobs complete\"",
+    "status": "PASS",
+    "detail": "All jobs complete"
+  }
+]

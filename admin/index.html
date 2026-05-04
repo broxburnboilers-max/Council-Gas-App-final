@@ -828,6 +828,75 @@
     return { imported, duplicates, noAccess: naAdded };
   }
 
+  // ---------- CLOUD DAYBOOK AUTO-IMPORT ----------
+  // BUG-FIX (Photos missing on admin PDFs):
+  // The engineer side now POSTs the FULL daybook (including photo data URLs)
+  // to /api/daybook on send.  This pulls the queue down, imports each daybook
+  // via the same importDaybook() path used by the manual file picker, then
+  // clears the cloud queue so we never double-import.
+  //
+  // Runs once on first admin load (and again on every reload).  Idempotent
+  // because importDaybook() upserts by certRef+date.
+  let cloudDaybookFetchInFlight = false;
+  async function fetchCloudDaybooksOnce() {
+    if (cloudDaybookFetchInFlight) return;
+    cloudDaybookFetchInFlight = true;
+    try {
+      const adminKey = (function () {
+        try { return sessionStorage.getItem("gsAdminKey") || ""; } catch (e) { return ""; }
+      })();
+      if (!adminKey) return; // not signed in
+      const resp = await fetch("/api/daybook", {
+        method: "GET",
+        headers: { "x-admin-key": adminKey },
+      });
+      if (!resp.ok) return;
+      const data = await resp.json().catch(function () { return {}; });
+      const items = (data && data.items) || [];
+      if (!items.length) return;
+
+      let totalCerts = 0, totalDups = 0, totalNa = 0, photoTotal = 0;
+      for (const it of items) {
+        const d = it && it.daybook;
+        if (!d) continue;
+        // Count photos for the toast.
+        (d.certs || []).forEach(function (c) {
+          if (Array.isArray(c.photos)) photoTotal += c.photos.length;
+        });
+        const r = importDaybook(d);
+        totalCerts += r.imported || 0;
+        totalDups  += r.duplicates || 0;
+        totalNa    += r.noAccess || 0;
+      }
+
+      // Clear the cloud queue ONLY after a successful import.
+      await fetch("/api/daybook", {
+        method: "DELETE",
+        headers: { "x-admin-key": adminKey },
+      }).catch(function () {});
+
+      const parts = [];
+      parts.push("Pulled " + totalCerts + " cert" + (totalCerts === 1 ? "" : "s") + " from cloud");
+      if (photoTotal) parts.push(photoTotal + " photo" + (photoTotal === 1 ? "" : "s"));
+      if (totalDups) parts.push(totalDups + " duplicate" + (totalDups === 1 ? "" : "s"));
+      if (totalNa) parts.push(totalNa + " no-access");
+      try {
+        sessionStorage.setItem("gs_import_toast", parts.join(" \u00b7 "));
+        sessionStorage.setItem("gs_auto_unlock", "1");
+      } catch (e) {}
+      // Reload so the React bundle re-reads fresh gsc_records from localStorage.
+      // (React holds gsc_records in component state and would clobber our write.)
+      if (totalCerts > 0 || totalDups > 0 || totalNa > 0) {
+        showLog(parts.join(" \u00b7 ") + " \u2014 refreshing\u2026", "#2a52d4");
+        setTimeout(function () { window.location.reload(); }, 700);
+      }
+    } catch (e) {
+      // best-effort — never break admin over a failed cloud fetch
+    } finally {
+      cloudDaybookFetchInFlight = false;
+    }
+  }
+
   // ---------- PDF WITH PHOTOS ----------
   // The bundle generates a single-page cert PDF via html2canvas + jsPDF (or
   // similar). We don't override that — instead we patch the click handler on
@@ -1259,6 +1328,10 @@
     // Also re-check periodically — html2canvas-driven PDF flows can rerender
     // without triggering a mutation we observe.
     setInterval(ensureVisitBadge, 1500);
+    // Pull any photo-bearing daybooks from the cloud queue. Slight delay so
+    // the React bundle has had time to mount and write its initial state to
+    // localStorage — we want our import to be the LAST writer.
+    setTimeout(fetchCloudDaybooksOnce, 1500);
   });
 })();
 

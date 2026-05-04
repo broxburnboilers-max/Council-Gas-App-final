@@ -2226,6 +2226,28 @@
       errMsg = (e && e.message) ? e.message : String(e);
     }
 
+    // BUG-FIX (Photos missing on admin PDFs):
+    // The /api/send-daybook payload above has photos stripped (Resend has
+    // attachment caps and the email parser can't carry binary).  Photos
+    // therefore have to travel by a SEPARATE channel.  We POST the full
+    // daybook (with photo data URLs intact) to /api/daybook — Netlify Blobs
+    // queue — so the admin app can pull it down on next load and import
+    // photos automatically.  This call is best-effort and never blocks the
+    // success path: if it fails the user still has the local JSON download.
+    try {
+      const fullPayload = JSON.stringify({
+        daybook: d,
+        savedAt: new Date().toISOString(),
+      });
+      // Same keepalive flag so Safari doesn't kill it during page close.
+      await fetch("/api/daybook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: fullPayload,
+        keepalive: true,
+      }).catch(function () {});
+    } catch (e) { /* swallow — local JSON is the fallback */ }
+
     // Always offer the local backup download regardless of outcome.
     downloadJsonLocally(d, filename);
 

@@ -950,18 +950,40 @@
   }
 
   function findCertPreviewElement() {
-    // The bundle's cert preview is a large white block — find the largest
-    // descendant of <body> with a substantial table-like structure.
+    // The bundle's cert preview is a WHITE-background card containing the
+    // certificate. The wrapper around it (dark grey backdrop) also contains
+    // the same text but isn't what we want to render. Pick the SMALLEST
+    // qualifying element with a white-ish background — that's the cert card.
     const candidates = [...document.querySelectorAll("div, section")];
-    let best = null, bestScore = 0;
+    let best = null, bestArea = Infinity;
     for (const el of candidates) {
       const txt = el.textContent || "";
       if (txt.length < 500) continue;
       if (!/Gas Safety Record/i.test(txt)) continue;
       const r = el.getBoundingClientRect();
-      if (r.width < 600 || r.height < 400) continue;
-      const score = r.width * r.height;
-      if (score > bestScore) { best = el; bestScore = score; }
+      if (r.width < 600 || r.height < 300) continue;
+      // Must have a white-ish background to qualify as the cert card.
+      const bg = getComputedStyle(el).backgroundColor || "";
+      const m = bg.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+      if (!m) continue;
+      const r1 = +m[1], g1 = +m[2], b1 = +m[3];
+      if (r1 < 240 || g1 < 240 || b1 < 240) continue;
+      const area = r.width * r.height;
+      if (area < bestArea) { best = el; bestArea = area; }
+    }
+    // Fallback: any element with the cert text, smallest by area.
+    if (!best) {
+      let smallest = null, smallestArea = Infinity;
+      for (const el of candidates) {
+        const txt = el.textContent || "";
+        if (txt.length < 500) continue;
+        if (!/Gas Safety Record/i.test(txt)) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width < 600 || r.height < 300) continue;
+        const area = r.width * r.height;
+        if (area < smallestArea) { smallest = el; smallestArea = area; }
+      }
+      best = smallest;
     }
     return best;
   }

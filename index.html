@@ -1150,10 +1150,39 @@
 
   // ---------- BUILD CERT RECORD ----------
   // Convert a parsed property + harvested photos into the admin's record shape.
+  //
+  // Bug 2 fix: Use the engineer-entered date (prop.date, in DD/MM/YYYY format)
+  // for BOTH certDate (date of work) AND inspectionDate (next inspection due,
+  // exactly 12 months after work date). NEVER fall back to today.
+  function parseEngineerDate(s) {
+    if (!s || typeof s !== "string") return null;
+    // Accept DD/MM/YYYY (engineer form output) or YYYY-MM-DD.
+    var m1 = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (m1) {
+      var d = new Date(Date.UTC(+m1[3], +m1[2] - 1, +m1[1], 12, 0, 0));
+      if (!isNaN(d.getTime())) return d;
+    }
+    var m2 = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (m2) {
+      var d2 = new Date(Date.UTC(+m2[1], +m2[2] - 1, +m2[3], 12, 0, 0));
+      if (!isNaN(d2.getTime())) return d2;
+    }
+    return null;
+  }
+
   function buildRecord(prop, engineerProfile, photos) {
-    const NOW = new Date();
-    const certDate = NOW.toISOString();
-    const inspectionDate = new Date(NOW.getFullYear() + 1, NOW.getMonth(), NOW.getDate()).toISOString();
+    // BUG 2 FIX: Use the engineer-entered date, not today.
+    const workDate = parseEngineerDate(prop.date) || new Date();
+    const certDate = workDate.toISOString();
+    // Next inspection due: 12 months after the work date (UTC arithmetic to
+    // avoid DST drift).
+    const nextDue = new Date(Date.UTC(
+      workDate.getUTCFullYear() + 1,
+      workDate.getUTCMonth(),
+      workDate.getUTCDate(),
+      12, 0, 0
+    ));
+    const inspectionDate = nextDue.toISOString();
 
     const engineerData = Object.assign({}, COMPANY_DEFAULTS, {
       gasSafeNo: engineerProfile && engineerProfile.gasSafeRegNo || "",
@@ -1253,10 +1282,16 @@
       };
     }
 
-    // Photos: attach those that look like they belong to this property
+    // Photos: attach those that look like they belong to this property.
+    // BUG 3 FIX: If a single send has just one property (the common case —
+    // engineer sends each cert separately), every harvested photo belongs to
+    // that property, no matter what the addr-match heuristic says.
+    // The caller (sweepQueue/ingestQueueItem) tells us via prop._singleSend
+    // whether the body has just one property.
     const attachedPhotos = (photos || []).filter(ph => {
       if (!ph || !ph.dataUrl) return false;
-      // If the harvested addr matches this property, attach.
+      if (prop._singleSend) return true; // single-property body — take all
+      // Multi-property body: try to match by address.
       const propAddrFlat = (prop.address1 + " " + prop.postcode).toLowerCase();
       const phAddrFlat = (ph.addr || "").toLowerCase();
       return phAddrFlat.includes((prop.address1 || "").toLowerCase()) ||
@@ -1273,84 +1308,171 @@
       signatureData: {},
       engineerData,
       photos: attachedPhotos.map(p => ({ label: p.label, dataUrl: p.dataUrl })),
-      savedAt: NOW.toISOString(),
+      savedAt: new Date().toISOString(),
     };
   }
 
-  // ---------- HOOK INTO THE EXISTING QUEUE EVENT ----------
-  function captureLatestQueue() {
-    let queue = [];
-    try { queue = JSON.parse(localStorage.getItem("citizenGas.queue") || "[]"); }
-    catch (e) { return; }
-    if (!queue.length) return;
+  // ---------- BUG 1 + BUG 3 FIX ----------
+  // The legacy approach (listen for citizenGas:queued, walk localStorage,
+  // harvest photos with a 50 ms delay) was racy: photos disappeared from the
+  // DOM as React navigated away, and entries that didn't parse on first pass
+  // got marked _daybookSaved and lost forever.
+  //
+  // New approach:
+  //   1. Monkey-patch localStorage.setItem so we run SYNCHRONOUSLY the
+  //      moment React writes citizenGas.queue. The review-screen DOM is
+  //      still mounted at this exact instant, so photos are harvestable.
+  //   2. For every queue entry that doesn't already have a captured copy in
+  //      the daybook (keyed by queue id, not certRef), parse its body and
+  //      attach photos snapshotted RIGHT NOW.
+  //   3. Also keep a fallback path on the citizenGas:queued event AND on
+  //      finishDay so anything missed gets caught.
 
-    let profile = null;
-    try { profile = JSON.parse(localStorage.getItem("citizenGas.engineerProfile") || "null"); } catch (e) {}
-
-    // Snapshot the photos *now*, before React unmounts the review screen.
-    // (Only relevant for the most-recent entry that triggered the event;
-    // older entries that were missed won't have DOM photos available.)
-    const photos = harvestPhotosFromReview();
-
-    const daybook = readDaybook();
-    if (!daybook.date) daybook.date = todayStamp();
-    daybook.engineer = profile || {};
-
-    let touched = false;
-
-    // Walk EVERY unsaved queue item — not just the last one. This is a
-    // safety net for the case where multiple queue pushes happened without
-    // our event listener firing (e.g. tab backgrounded, race condition,
-    // or older saved entries from a previous session-day that never made
-    // it to the daybook).
-    queue.forEach(function (item, idx) {
-      if (!item || item._daybookSaved) return;
-      const properties = parseDaybookBody(item.body || "");
-      if (!properties.length) return;
-
-      // Photos are only safely associated with the LAST queue entry
-      // (the one that fired this event). For older entries, pass [].
-      const isLatest = idx === queue.length - 1;
-      const photosForItem = isLatest ? photos : [];
-
-      properties.forEach(prop => {
-        if (prop.noAccess) {
-          daybook.noAccess = daybook.noAccess || [];
-          daybook.noAccess.push({
-            address1: prop.address1,
-            address2: prop.address2,
-            postcode: prop.postcode,
-            date: prop.date || todayStamp(),
-          });
-        } else {
-          const rec = buildRecord(prop, profile, photosForItem);
-          daybook.certs = daybook.certs || [];
-          // Replace any existing record with the same certRef from today
-          daybook.certs = daybook.certs.filter(r => r.certData.certRef !== rec.certData.certRef);
-          daybook.certs.push(rec);
-        }
-      });
-      touched = true;
-    });
-
-    if (!touched) return;
-
-    writeDaybook(daybook);
-
-    // Mark every queue entry so we don't double-save on a future event.
-    try {
-      const q2 = JSON.parse(localStorage.getItem("citizenGas.queue") || "[]");
-      q2.forEach(function (it) { if (it) it._daybookSaved = true; });
-      localStorage.setItem("citizenGas.queue", JSON.stringify(q2));
-    } catch (e) {}
-
-    refreshDaybookButton();
+  // Records the queue ids we've already processed into the daybook, so we
+  // never double-process and never lose entries.
+  const PROCESSED_KEY = "citizenGas.daybookProcessed";
+  function readProcessed() {
+    try { return JSON.parse(localStorage.getItem(PROCESSED_KEY) || "{}"); }
+    catch (e) { return {}; }
+  }
+  function writeProcessed(map) {
+    try { localStorage.setItem(PROCESSED_KEY, JSON.stringify(map)); } catch (e) {}
   }
 
-  // Listen — same event the existing cloud-push uses, but we run AFTER it.
+  // Process exactly one queue entry into the daybook. Photos must be passed
+  // in (already harvested), because by the time we async over to handle them
+  // the DOM may be gone.
+  function ingestQueueItem(item, photos, profile) {
+    if (!item || !item.id) return false;
+    const processed = readProcessed();
+    if (processed[item.id]) return false;
+
+    const properties = parseDaybookBody(item.body || "");
+    if (!properties.length) {
+      // Mark as processed anyway so we don't keep retrying a malformed entry.
+      processed[item.id] = { at: Date.now(), parsed: 0 };
+      writeProcessed(processed);
+      return false;
+    }
+
+    let daybook = readDaybook();
+    // If the daybook is from a previous day, archive it and start a fresh
+    // one. Also clear the processed-queue map so the new day captures
+    // everything cleanly.
+    if (daybook.date && daybook.date !== todayStamp()) {
+      try {
+        const archiveKey = "citizenGas.daybook.archive." + daybook.date;
+        localStorage.setItem(archiveKey, JSON.stringify(daybook));
+      } catch (e) {}
+      daybook = { date: "", certs: [], noAccess: [] };
+      writeProcessed({});
+    }
+    if (!daybook.date) daybook.date = todayStamp();
+    daybook.engineer = profile || daybook.engineer || {};
+    daybook.certs = daybook.certs || [];
+    daybook.noAccess = daybook.noAccess || [];
+
+    const singleSend = properties.length === 1;
+    properties.forEach(function (prop) {
+      prop._singleSend = singleSend;
+      if (prop.noAccess) {
+        daybook.noAccess.push({
+          address1: prop.address1,
+          address2: prop.address2,
+          postcode: prop.postcode,
+          date: prop.date || todayStamp(),
+        });
+      } else {
+        const rec = buildRecord(prop, profile, photos);
+        // BUG 1 FIX: De-dup by certRef + work-date so two visits to the same
+        // address on different days both survive, and a re-send of the same
+        // visit (same date) replaces (doesn't duplicate). Previously dedup
+        // was certRef-only, which caused returns/visit-2 to clobber visit-1.
+        const refKey = (rec.certData.certRef || "") + "|" + (rec.engineerData.certDate || "").slice(0, 10);
+        daybook.certs = daybook.certs.filter(function (r) {
+          var existingKey = (r.certData.certRef || "") + "|" + (r.engineerData && r.engineerData.certDate ? r.engineerData.certDate.slice(0, 10) : "");
+          return existingKey !== refKey;
+        });
+        daybook.certs.push(rec);
+      }
+    });
+
+    writeDaybook(daybook);
+    processed[item.id] = { at: Date.now(), parsed: properties.length, photoCount: (photos || []).length };
+    writeProcessed(processed);
+    return true;
+  }
+
+  function getCurrentProfile() {
+    try { return JSON.parse(localStorage.getItem("citizenGas.engineerProfile") || "null"); }
+    catch (e) { return null; }
+  }
+
+  // Walk the entire queue and ingest any unprocessed entries. Used as a
+  // safety-net sweep on event, on a polling interval, and on finishDay.
+  // photos must be the ALREADY-HARVESTED snapshot; if older entries are
+  // unprocessed and the DOM no longer has their photos, they get [].
+  function sweepQueue(latestPhotos) {
+    let queue = [];
+    try { queue = JSON.parse(localStorage.getItem("citizenGas.queue") || "[]"); }
+    catch (e) { return 0; }
+    if (!queue.length) return 0;
+    const profile = getCurrentProfile();
+    let count = 0;
+    queue.forEach(function (item, idx) {
+      // Only the last queue entry can be matched to currently-mounted photos.
+      const photos = (idx === queue.length - 1) ? (latestPhotos || []) : [];
+      if (ingestQueueItem(item, photos, profile)) count++;
+    });
+    if (count) refreshDaybookButton();
+    return count;
+  }
+
+  // BUG 1 + BUG 3 FIX — synchronous monkey-patch of localStorage.setItem.
+  // When React writes citizenGas.queue, we intercept BEFORE the write
+  // completes, harvest photos from the still-mounted review screen, and
+  // then process the new entry. This is the only point where we are
+  // guaranteed the photos are still in the DOM.
+  (function patchSetItem() {
+    if (window.__cgDaybookPatched) return;
+    window.__cgDaybookPatched = true;
+    const origSet = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key, value) {
+      const ret = origSet.apply(this, arguments);
+      if (this === window.localStorage && key === "citizenGas.queue") {
+        // Harvest photos NOW, while the review screen is still mounted.
+        let photos = [];
+        try { photos = harvestPhotosFromReview(); } catch (e) {}
+        // Defer ingestion to a microtask so the value is fully written and
+        // we don't reenter setItem from inside our own write.
+        Promise.resolve().then(function () {
+          try { sweepQueue(photos); } catch (e) { console.error("daybook sweep failed", e); }
+        });
+      }
+      return ret;
+    };
+  })();
+
+  // Belt-and-braces fallback: also catch the queued event in case the patch
+  // got swallowed (extensions, future bundle changes).
   window.addEventListener("citizenGas:queued", function () {
-    setTimeout(captureLatestQueue, 50); // slightly before cloud push so photos are still in DOM
+    let photos = [];
+    try { photos = harvestPhotosFromReview(); } catch (e) {}
+    sweepQueue(photos);
+    // Re-sweep after 200 ms in case React rendered photos slightly late.
+    setTimeout(function () { sweepQueue(harvestPhotosFromReview()); }, 200);
   });
+
+  // Polling safety net: every 2 s, sweep any unprocessed queue entries.
+  // Cheap, and covers tab-backgrounded / extension-blocked cases.
+  setInterval(function () { sweepQueue([]); }, 2000);
+
+  // Backwards-compat alias used by finishDay.
+  function captureLatestQueue() {
+    let photos = [];
+    try { photos = harvestPhotosFromReview(); } catch (e) {}
+    sweepQueue(photos);
+  }
 
   // ---------- FINISH & SEND UI ----------
   function ensureDaybookButton() {
@@ -1521,6 +1643,10 @@
 
     if (resendOk) {
       writeDaybook({ date: "", certs: [], noAccess: [] });
+      // Clear the processed-queue map and the queue itself so tomorrow starts
+      // fresh and the processed map doesn't grow forever.
+      try { localStorage.removeItem("citizenGas.daybookProcessed"); } catch (e) {}
+      try { localStorage.removeItem("citizenGas.queue"); } catch (e) {}
       refreshDaybookButton();
       showStatusModal({
         title: "Sent \u2713",

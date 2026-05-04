@@ -886,9 +886,31 @@
       } catch (e) {}
       // Reload so the React bundle re-reads fresh gsc_records from localStorage.
       // (React holds gsc_records in component state and would clobber our write.)
+      //
+      // CRITICAL: only reload ONCE per session, otherwise we hit a loop:
+      //   - load 1: cloud has items → import → reload
+      //   - load 2: cloud now empty (DELETE finished) BUT propagation lag may
+      //     leave items still visible → import again → reload again …
+      // Worse, even if the cloud truly is empty, React's initial mount writes
+      // an empty gsc_records BEFORE our setTimeout fires — if we then reload,
+      // the loop never lets the user actually see the records.
+      // Solution: gate the reload with a sessionStorage flag so we reload AT
+      // MOST once per browser session.  The records are already in
+      // localStorage from importDaybook(); the reload just refreshes React
+      // state to display them.
       if (totalCerts > 0 || totalDups > 0 || totalNa > 0) {
-        showLog(parts.join(" \u00b7 ") + " \u2014 refreshing\u2026", "#2a52d4");
-        setTimeout(function () { window.location.reload(); }, 700);
+        let alreadyReloaded = false;
+        try { alreadyReloaded = sessionStorage.getItem("gs_cloud_reloaded") === "1"; } catch (e) {}
+        if (!alreadyReloaded) {
+          try { sessionStorage.setItem("gs_cloud_reloaded", "1"); } catch (e) {}
+          showLog(parts.join(" \u00b7 ") + " \u2014 refreshing\u2026", "#2a52d4");
+          setTimeout(function () { window.location.reload(); }, 700);
+        } else {
+          // Already reloaded once. Just show the toast — the user will see
+          // the records on next navigation (React lazy-reads from localStorage
+          // when it routes between screens).
+          showLog(parts.join(" \u00b7 "), "#2a52d4");
+        }
       }
     } catch (e) {
       // best-effort — never break admin over a failed cloud fetch

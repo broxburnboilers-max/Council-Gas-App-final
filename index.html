@@ -295,6 +295,43 @@
       // data:image URL or a blob: URL. Either way we convert to a data URL
       // and push into the bucket. This runs whenever React paints a photo,
       // regardless of how the photo arrived.
+      // FEATURE (handle up to ~40 photos per email):
+      // Compress every photo to max 2048px on the long edge as JPEG q=0.82
+      // BEFORE it lands in the bucket. Modern phone photos are 3-5 MB each;
+      // compressed they're typically 300-500 KB. That keeps the daily email
+      // well under Resend's 40 MB envelope cap even with 40+ photos.
+      // If compression fails for any reason we fall back to the raw data URL.
+      function compressDataUrl(dataUrl, cb) {
+        try {
+          var MAX_EDGE = 2048;
+          var QUALITY = 0.82;
+          var img = new Image();
+          img.onload = function () {
+            try {
+              var w = img.naturalWidth || img.width;
+              var h = img.naturalHeight || img.height;
+              if (!w || !h) { cb(dataUrl); return; }
+              var scale = Math.min(1, MAX_EDGE / Math.max(w, h));
+              var tw = Math.round(w * scale);
+              var th = Math.round(h * scale);
+              var canvas = document.createElement("canvas");
+              canvas.width = tw;
+              canvas.height = th;
+              var ctx = canvas.getContext("2d");
+              ctx.drawImage(img, 0, 0, tw, th);
+              var out = canvas.toDataURL("image/jpeg", QUALITY);
+              // Sanity check: only use compressed if it's actually smaller.
+              if (typeof out === "string" && out.length < dataUrl.length) {
+                cb(out);
+              } else {
+                cb(dataUrl);
+              }
+            } catch (e) { cb(dataUrl); }
+          };
+          img.onerror = function () { cb(dataUrl); };
+          img.src = dataUrl;
+        } catch (e) { cb(dataUrl); }
+      }
       function pushIfNew(dataUrl) {
         if (typeof dataUrl !== "string") return;
         if (dataUrl.indexOf("data:image/") !== 0) return;
@@ -302,7 +339,20 @@
         for (var i = 0; i < b.length; i++) {
           if (b[i] && b[i].dataUrl === dataUrl) return;
         }
-        window.__cgPhotoBucket.push({ dataUrl: dataUrl, capturedAt: Date.now() });
+        // If the photo is small enough already (<200KB) skip compression to
+        // save CPU. Otherwise downscale before storing.
+        if (dataUrl.length < 200 * 1024) {
+          window.__cgPhotoBucket.push({ dataUrl: dataUrl, capturedAt: Date.now() });
+          return;
+        }
+        compressDataUrl(dataUrl, function (compressed) {
+          // Re-check dedup after async compression.
+          var b2 = window.__cgPhotoBucket || [];
+          for (var j = 0; j < b2.length; j++) {
+            if (b2[j] && b2[j].dataUrl === compressed) return;
+          }
+          window.__cgPhotoBucket.push({ dataUrl: compressed, capturedAt: Date.now() });
+        });
       }
       function blobUrlToDataUrl(blobUrl) {
         try {

@@ -28,21 +28,29 @@
       @keyframes gs-spin { to { transform: rotate(360deg); } }
       #gs-import-overlay h2 { font-size: 22px; font-weight: 700; margin: 0 0 8px; }
       #gs-import-overlay p { font-size: 14px; color: #cdd5dc; margin: 0; max-width: 320px; line-height: 1.5; }
-      /* Floating link to the Job Assignment page */
-      #gs-jobs-link {
-        position: fixed; right: 16px; bottom: 16px; z-index: 9998;
-        background: #F2682A; color: #fff; border: 0; border-radius: 999px;
-        padding: 12px 20px; font: 800 13px/1 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
-        letter-spacing: 0.04em; text-transform: uppercase; cursor: pointer;
-        text-decoration: none; box-shadow: 0 6px 20px rgba(242,104,42,0.45);
+      /* Dashboard tiles injected to match React home tiles (New Job / Records / GSC Email) */
+      .gs-extra-tile {
+        display: flex; flex-direction: column; align-items: center;
+        margin: 24px auto 0; cursor: pointer; user-select: none;
+        font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
       }
-      #gs-jobs-link:active { transform: scale(0.97); }
+      .gs-extra-tile .gs-tile-circle {
+        width: 110px; height: 110px; border-radius: 50%;
+        border: 3px solid #2a52d4; display: flex; align-items: center;
+        justify-content: center; background: #fff;
+        transition: transform 0.12s ease;
+      }
+      .gs-extra-tile:active .gs-tile-circle { transform: scale(0.96); }
+      .gs-extra-tile .gs-tile-icon {
+        font-size: 44px; color: #2a52d4; line-height: 1;
+      }
+      .gs-extra-tile .gs-tile-label {
+        margin-top: 12px; font-weight: 700; font-size: 16px; color: #1a2530;
+      }
     </style>
   </head>
   <body>
     <div id="root"></div>
-
-    <a id="gs-jobs-link" href="/admin/jobs">Assign Jobs</a>
 
     <div id="gs-import-overlay" role="dialog" aria-live="polite">
       <div class="spinner"></div>
@@ -353,47 +361,116 @@
 // a multi-page PDF is built (cert page first, then one photo per page).
 
 (function () {
-  const DAYBOOK_BTN_ID = "gs-daybook-import-btn";
   const DAYBOOK_FILE_ID = "gs-daybook-file";
   const DAYBOOK_LOG_ID = "gs-daybook-log";
+  const TILE_DAYBOOK_ID = "gs-tile-daybook";
+  const TILE_JOBS_ID = "gs-tile-jobs";
 
-  function ensureUi() {
-    if (document.getElementById(DAYBOOK_BTN_ID)) return;
+  // Find the home dashboard ('What would you like to do?' screen).
+  // Returns the container that holds the React home tiles (New Job / Records /
+  // GSC Email), so we can append our two extra tiles inside it.
+  function findHomeTilesContainer() {
+    const all = [...document.querySelectorAll("div, span, h1, h2, h3, p")];
+    let promptEl = null;
+    for (const el of all) {
+      if (el.children.length !== 0) continue;
+      if ((el.textContent || "").trim() === "What would you like to do?") {
+        promptEl = el; break;
+      }
+    }
+    if (!promptEl) return null;
+    // Find the tile labeled 'GSC Email' — it's the last home tile, and its
+    // common ancestor with the prompt is the dashboard container.
+    let gscLabel = null;
+    for (const el of all) {
+      if (el.children.length !== 0) continue;
+      if ((el.textContent || "").trim() === "GSC Email") { gscLabel = el; break; }
+    }
+    if (!gscLabel) return null;
+    // Find the tile root (climb until we hit the cursor:pointer ancestor).
+    let gscTile = gscLabel;
+    while (gscTile && gscTile !== document.body) {
+      try {
+        const cs = getComputedStyle(gscTile);
+        if (cs.cursor === "pointer") break;
+      } catch (e) {}
+      gscTile = gscTile.parentElement;
+    }
+    if (!gscTile || gscTile === document.body) return null;
+    return gscTile.parentElement; // sibling container of the tiles
+  }
 
-    const btn = document.createElement("button");
-    btn.id = DAYBOOK_BTN_ID;
-    btn.type = "button";
-    btn.textContent = "Import Daybook";
-    btn.style.cssText = [
-      "position:fixed", "right:16px", "bottom:64px", "z-index:9998",
-      "background:#2a52d4", "color:#fff", "border:0", "border-radius:999px",
-      "padding:12px 18px", "font:800 13px/1 ui-sans-serif,system-ui,sans-serif",
-      "letter-spacing:0.04em", "text-transform:uppercase", "cursor:pointer",
-      "box-shadow:0 4px 16px rgba(42,82,212,0.45)",
-    ].join(";");
-
-    const file = document.createElement("input");
+  function ensureFileInput() {
+    let file = document.getElementById(DAYBOOK_FILE_ID);
+    if (file) return file;
+    file = document.createElement("input");
     file.type = "file";
     file.id = DAYBOOK_FILE_ID;
     file.accept = "application/json,.json";
     file.style.display = "none";
-
-    btn.addEventListener("click", () => file.click());
     file.addEventListener("change", onFileChosen);
+    document.body.appendChild(file);
+    return file;
+  }
 
-    const log = document.createElement("div");
+  function ensureLog() {
+    let log = document.getElementById(DAYBOOK_LOG_ID);
+    if (log) return log;
+    log = document.createElement("div");
     log.id = DAYBOOK_LOG_ID;
     log.style.cssText = [
-      "position:fixed", "right:16px", "bottom:120px", "z-index:9998",
+      "position:fixed", "left:50%", "transform:translateX(-50%)",
+      "bottom:24px", "z-index:9998",
       "background:#1a2530", "color:#fff", "border:1px solid #334",
       "border-radius:12px", "padding:14px 18px", "max-width:340px",
       "font:600 13px/1.4 ui-sans-serif,system-ui,sans-serif",
       "display:none", "box-shadow:0 6px 24px rgba(0,0,0,0.4)",
+      "text-align:center",
     ].join(";");
-
-    document.body.appendChild(btn);
-    document.body.appendChild(file);
     document.body.appendChild(log);
+    return log;
+  }
+
+  function buildTile(id, label, iconHtml, onClick) {
+    const wrap = document.createElement("div");
+    wrap.id = id;
+    wrap.className = "gs-extra-tile";
+    wrap.innerHTML =
+      '<div class="gs-tile-circle"><div class="gs-tile-icon">' + iconHtml + '</div></div>' +
+      '<div class="gs-tile-label">' + label + '</div>';
+    wrap.addEventListener("click", onClick);
+    return wrap;
+  }
+
+  function ensureUi() {
+    ensureFileInput();
+    ensureLog();
+
+    const container = findHomeTilesContainer();
+    if (!container) {
+      // We're not on the home dashboard — remove any orphaned tiles.
+      const a = document.getElementById(TILE_DAYBOOK_ID);
+      const b = document.getElementById(TILE_JOBS_ID);
+      if (a) a.remove();
+      if (b) b.remove();
+      return;
+    }
+
+    // Inject Import Daybook tile if not present.
+    if (!document.getElementById(TILE_DAYBOOK_ID)) {
+      const tile = buildTile(TILE_DAYBOOK_ID, "Import Daybook", "\u2B07", function () {
+        ensureFileInput().click();
+      });
+      container.appendChild(tile);
+    }
+
+    // Inject Assign Jobs tile if not present.
+    if (!document.getElementById(TILE_JOBS_ID)) {
+      const tile = buildTile(TILE_JOBS_ID, "Assign Jobs", "\uD83D\uDCCB", function () {
+        window.location.href = "/admin/jobs";
+      });
+      container.appendChild(tile);
+    }
   }
 
   function showLog(msg, color) {
@@ -694,7 +771,8 @@
   // ---------- BOOT ----------
   window.addEventListener("DOMContentLoaded", function () {
     setTimeout(ensureUi, 400);
-    // Watch for the cert preview to mount, then add the photo-download btn.
+    // Watch for screen changes — re-add the dashboard tiles when home is shown,
+    // remove them when navigating away. Also handles the cert-preview photo btn.
     const mo = new MutationObserver(() => {
       ensureUi();
       ensurePhotoDownloadBtn();

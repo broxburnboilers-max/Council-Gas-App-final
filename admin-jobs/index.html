@@ -301,7 +301,19 @@
               btn.disabled = false;
               if (!r.ok) { toast("Save failed", true); return; }
               toast("Saved");
-              loadSlots();
+              // Trust the server's just-written slot list. Don't re-GET — Netlify
+              // Blobs has eventual consistency and an immediate read can return
+              // the stale label, leaving the UI showing the old name until a
+              // second save caught up.
+              if (r.body && Array.isArray(r.body.slots)) {
+                slotsCache = r.body.slots;
+                renderSlots();
+                renderAssignSelect();
+                // Re-render the job list so engineer headings show the new label.
+                loadJobs();
+              } else {
+                loadSlots();
+              }
             }).catch(function () {
               btn.disabled = false;
               toast("Network error", true);
@@ -446,8 +458,24 @@
             weekSaveBtn.disabled = false;
             if (!r.ok) { toast("Save failed: " + (r.body.error || r.status), true); return; }
             toast("Saved " + r.body.added + " jobs");
-            loadJobs();
-            loadWeekForCurrentSlot();
+            // Render straight from the server's just-written list — same eventual-
+            // consistency reason as ad-hoc assigns above.
+            if (Array.isArray(r.body.allItems)) {
+              renderJobs(r.body.allItems);
+              // Re-render the week grid from the same authoritative list so the
+              // textareas reflect what was actually saved.
+              var byDate = {};
+              r.body.allItems.forEach(function (j) {
+                if (j.slotId !== slotId || !j.dueDate) return;
+                if (!byDate[j.dueDate]) byDate[j.dueDate] = [];
+                var line = [j.address1, j.address2, j.postcode].filter(Boolean).join(", ");
+                byDate[j.dueDate].push(line);
+              });
+              renderWeekGrid(byDate);
+            } else {
+              loadJobs();
+              loadWeekForCurrentSlot();
+            }
           }).catch(function () {
             weekSaveBtn.disabled = false;
             toast("Network error", true);
@@ -500,7 +528,11 @@
             api("/api/jobs?slotId=" + encodeURIComponent(slotId), { method: "DELETE" }).then(function (r) {
               if (!r.ok) { toast("Failed", true); return; }
               toast("Cleared");
-              loadJobs();
+              if (Array.isArray(r.body.allItems)) {
+                renderJobs(r.body.allItems);
+              } else {
+                loadJobs();
+              }
             });
           });
         });
@@ -527,9 +559,27 @@
         }).then(function (r) {
           btn.disabled = false;
           if (!r.ok) { toast("Failed: " + (r.body.error || r.status), true); return; }
-          toast("Added " + r.body.added + " job" + (r.body.added === 1 ? "" : "s"));
+          var added = r.body.added || 0;
+          var skipped = r.body.skipped || 0;
+          var msg;
+          if (added === 0 && skipped > 0) {
+            msg = "Already assigned — " + skipped + " duplicate" + (skipped === 1 ? "" : "s") + " skipped";
+          } else if (skipped > 0) {
+            msg = "Added " + added + ", skipped " + skipped + " duplicate" + (skipped === 1 ? "" : "s");
+          } else {
+            msg = "Added " + added + " job" + (added === 1 ? "" : "s");
+          }
+          toast(msg);
           document.getElementById("assign-addresses").value = "";
-          loadJobs();
+          // Render directly from the server's just-written list. Don't re-GET —
+          // Netlify Blobs has eventual consistency and an immediate read can
+          // return the stale (pre-write) state, making "Currently assigned" show
+          // empty and tricking the user into re-sending.
+          if (Array.isArray(r.body.allItems)) {
+            renderJobs(r.body.allItems);
+          } else {
+            loadJobs();
+          }
         }).catch(function () {
           btn.disabled = false;
           toast("Network error", true);

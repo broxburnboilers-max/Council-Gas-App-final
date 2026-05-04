@@ -1213,7 +1213,17 @@
         applianceServiced: "N/A", applianceSafe: "N/A", safetyDevices: "N/A",
       };
     }
-    const appliances = (prop.appliances || []).map(a => {
+    // VISIT 1 RULE (per user spec): cooker info MUST NOT appear on the
+    // gas-safety certificate. Photos still flow through. APPLIANCE 2 is
+    // therefore stripped from the appliances array on visit 1, even though
+    // the engineer captured the cooker's location/make/pressure as part of
+    // the cap-tightness workflow.
+    const visitNum = (typeof prop.visit === "number" && prop.visit) || parseInt(prop.visit || "1", 10) || 1;
+    const filteredApps = (prop.appliances || []).filter(function (a) {
+      if (visitNum === 1 && a && a.heading === "APPLIANCE 2") return false;
+      return true;
+    });
+    const appliances = filteredApps.map(a => {
       const base = naAppliance();
       base.location = a.location || base.location;
       base.type = a.type || base.type;
@@ -1667,8 +1677,16 @@
   else window.addEventListener("DOMContentLoaded", startCookerExtraWatcher);
 
   // Splice Type / Model lines into the APPLIANCE 2 block of an outgoing body.
+  // VISIT 1 RULE: do NOT inject Type/Model on visit 1 — cooker info must not
+  // appear on the cert when the engineer is only capping. We detect visit 1
+  // by looking for `Visit: 1` in the property block.
   function injectCookerExtraIntoBody(body) {
     if (!body || typeof body !== "string") return body;
+    // Detect visit number from body. If visit 1, leave body alone (cooker
+    // info is not part of visit-1 cert).
+    var visitMatch = body.match(/^Visit:\s*(\d+)/m);
+    var visit = visitMatch ? parseInt(visitMatch[1], 10) : 0;
+    if (visit === 1) return body;
     var extra = readCookerExtraFromStorage();
     var type = (extra.type || "").trim();
     var model = (extra.model || "").trim() || "NA";

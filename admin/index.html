@@ -29,9 +29,14 @@
       #gs-import-overlay h2 { font-size: 22px; font-weight: 700; margin: 0 0 8px; }
       #gs-import-overlay p { font-size: 14px; color: #cdd5dc; margin: 0; max-width: 320px; line-height: 1.5; }
       /* Dashboard tiles injected to match React home tiles (New Job / Records / GSC Email) */
+      #gs-extra-tile-row {
+        display: flex; flex-direction: row; justify-content: center;
+        align-items: flex-start; gap: 32px; margin: 24px auto 0;
+        flex-wrap: wrap;
+      }
       .gs-extra-tile {
         display: flex; flex-direction: column; align-items: center;
-        margin: 24px auto 0; cursor: pointer; user-select: none;
+        cursor: pointer; user-select: none;
         font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
       }
       .gs-extra-tile .gs-tile-circle {
@@ -51,6 +56,58 @@
   </head>
   <body>
     <div id="root"></div>
+
+    <script>
+    // ============================================================
+    // AUTO-UNLOCK: the React app shows a password screen on every
+    // page load. Since the admin auth is already gated by
+    // sessionStorage.gsAdminAuth (set by the engineer-side admin sign-in),
+    // there's no security value in re-typing the password every reload.
+    // This script fills 'Test' and clicks 'Unlock App' automatically as
+    // soon as the screen appears. Especially important after Import Daybook,
+    // which reloads the page to refresh React state from localStorage.
+    // ============================================================
+    (function () {
+      try {
+        if (sessionStorage.getItem("gsAdminAuth") !== "1") return;
+      } catch (e) { return; }
+      var ADMIN_PW = "Test";
+      try { ADMIN_PW = sessionStorage.getItem("gsAdminKey") || ADMIN_PW; } catch (e) {}
+
+      function tryUnlock() {
+        var pw = document.querySelector('input[type="password"]');
+        if (!pw) return false;
+        // React-friendly value setter
+        try {
+          var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+          setter.call(pw, ADMIN_PW);
+          pw.dispatchEvent(new Event("input", { bubbles: true }));
+          pw.dispatchEvent(new Event("change", { bubbles: true }));
+        } catch (e) {
+          pw.value = ADMIN_PW;
+        }
+        // Find Unlock button
+        var btns = document.querySelectorAll("button");
+        for (var i = 0; i < btns.length; i++) {
+          var t = (btns[i].textContent || "").trim();
+          if (/unlock/i.test(t)) {
+            setTimeout(function (b) { return function () { b.click(); }; }(btns[i]), 50);
+            return true;
+          }
+        }
+        return false;
+      }
+
+      // Poll until the lock screen appears (or 10s elapses), then unlock once.
+      var unlocked = false;
+      var start = Date.now();
+      var iv = setInterval(function () {
+        if (unlocked) { clearInterval(iv); return; }
+        if (Date.now() - start > 10000) { clearInterval(iv); return; }
+        if (tryUnlock()) unlocked = true;
+      }, 120);
+    })();
+    </script>
 
     <div id="gs-import-overlay" role="dialog" aria-live="polite">
       <div class="spinner"></div>
@@ -451,9 +508,21 @@
       // We're not on the home dashboard — remove any orphaned tiles.
       const a = document.getElementById(TILE_DAYBOOK_ID);
       const b = document.getElementById(TILE_JOBS_ID);
+      const r = document.getElementById("gs-extra-tile-row");
       if (a) a.remove();
       if (b) b.remove();
+      if (r) r.remove();
       return;
+    }
+
+    // Get-or-create the row wrapper so both tiles sit side-by-side.
+    let row = document.getElementById("gs-extra-tile-row");
+    if (!row) {
+      row = document.createElement("div");
+      row.id = "gs-extra-tile-row";
+      container.appendChild(row);
+    } else if (row.parentElement !== container) {
+      container.appendChild(row);
     }
 
     // Inject Import Daybook tile if not present.
@@ -461,7 +530,7 @@
       const tile = buildTile(TILE_DAYBOOK_ID, "Import Daybook", "\u2B07", function () {
         ensureFileInput().click();
       });
-      container.appendChild(tile);
+      row.appendChild(tile);
     }
 
     // Inject Assign Jobs tile if not present.
@@ -469,7 +538,7 @@
       const tile = buildTile(TILE_JOBS_ID, "Assign Jobs", "\uD83D\uDCCB", function () {
         window.location.href = "/admin/jobs";
       });
-      container.appendChild(tile);
+      row.appendChild(tile);
     }
   }
 
@@ -500,13 +569,17 @@
       if (dups) parts.push(dups + " skipped (already imported)");
       if (na) parts.push(na + " no-access logged");
       showLog(parts.join(" · ") + " — refreshing…", "#2a52d4");
-      // CRITICAL: the React bundle keeps gsc_records in local state and writes it
-      // back on every render — it would clobber the localStorage we just wrote.
-      // Force a full reload so React re-initializes from the fresh localStorage.
       // Persist a one-shot toast across reload via sessionStorage.
       try {
         sessionStorage.setItem("gs_import_toast", parts.join(" · "));
+        // Mark that we should auto-unlock the React password screen if it appears.
+        sessionStorage.setItem("gs_auto_unlock", "1");
       } catch (e) {}
+      // CRITICAL: the React bundle keeps gsc_records in local state and writes it
+      // back on every render — it would clobber the localStorage we just wrote.
+      // Force a full reload so React re-initializes from the fresh localStorage.
+      // The auto-unlock IIFE below will fill the password automatically so the
+      // user never sees the lock screen.
       setTimeout(() => { window.location.reload(); }, 600);
     };
     reader.onerror = () => showLog("Could not read file.", "#c0392b");

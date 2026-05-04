@@ -293,6 +293,16 @@
       // the engineer finishes the LAST job of the day. Wipe session state
       // and bounce back to the sign-in screen.
       doneBtn.addEventListener("click", function () {
+        // End-of-day path: trigger the daybook email instead of just
+        // dismissing the overlay. The send modal handles success/cancel
+        // and the engineer can dismiss the overlay separately.
+        if (doneBtn.dataset.endOfDay === "1") {
+          if (typeof window.cgFinishDay === "function") {
+            window.cgFinishDay();
+          }
+          return;
+        }
+        // Legacy path (single-job 'Sent' overlay) — clear and bounce.
         overlay.classList.remove("show");
         pushLatestToCloud(); // best-effort retry
         try {
@@ -710,12 +720,18 @@
 
       function showEndOfDayOverlay() {
         // Update the existing #cg-sent-overlay copy for the end-of-day case.
+        // The Done/Finish button is repurposed into 'Send to admin' which
+        // triggers the daybook email. After the email is sent (or cancelled)
+        // the overlay's normal Done handler still runs to clear state.
         try {
           var h1 = overlay.querySelector("h1");
           var p = overlay.querySelector("p");
           if (h1) h1.textContent = "All jobs complete";
-          if (p) p.textContent = "All visits saved. Have a good evening.";
-          if (doneBtn) doneBtn.textContent = "Finish";
+          if (p) p.textContent = "Tap below to email today's daybook to admin.";
+          if (doneBtn) {
+            doneBtn.textContent = "Send today's daybook to admin";
+            doneBtn.dataset.endOfDay = "1";
+          }
         } catch (e) {}
         overlay.classList.add("show");
       }
@@ -1290,29 +1306,15 @@
     document.body.appendChild(btn);
   }
   function refreshDaybookButton() {
-    ensureDaybookButton();
-    const btn = document.getElementById("cg-daybook-btn");
-    if (!btn) return;
-    const d = readDaybook();
-    const c = (d.certs || []).length;
-    const na = (d.noAccess || []).length;
-    const has = c || na;
-    const isSignedIn = !!localStorage.getItem("citizenGas.engineerProfile");
-    // Always visible once signed in — even with zero data — so the engineer
-    // never has to wonder where the button is. Tapping when empty just shows
-    // a friendly modal explaining there's nothing to send yet.
-    btn.style.display = isSignedIn ? "block" : "none";
-    if (has) {
-      btn.textContent = "Finish day & email (" + c + " cert" + (c === 1 ? "" : "s") +
-        (na ? ", " + na + " no-access" : "") + ")";
-      btn.style.background = "#F2682A"; // orange brand: data ready
-      btn.style.boxShadow = "0 8px 24px rgba(242,104,42,0.35)";
-    } else {
-      btn.textContent = "Finish day & email (0)";
-      btn.style.background = "#6b7785"; // grey: nothing yet
-      btn.style.boxShadow = "0 8px 24px rgba(0,0,0,0.35)";
-    }
+    // Floating button removed — the daybook is sent from the end-of-day
+    // overlay that appears after the LAST job is completed. This function is
+    // kept as a no-op so other call sites don't break.
+    var existing = document.getElementById("cg-daybook-btn");
+    if (existing) existing.remove();
   }
+  // Expose finishDay so the sign-in IIFE's end-of-day overlay can trigger
+  // the same send flow (modal confirmation → Resend email).
+  window.cgFinishDay = function () { try { finishDay(); } catch (e) {} };
 
   // ---- Safari-friendly modal (replaces alert/confirm which can stall on iOS) ----
   function showStatusModal(opts) {
@@ -1452,7 +1454,24 @@
       showStatusModal({
         title: "Sent \u2713",
         message: "Daybook emailed to broxburnboilers@gmail.com.\nA copy also saved to Downloads as " + filename + ".",
-        buttons: [{ label: "Done", primary: true }],
+        buttons: [{
+          label: "Done", primary: true,
+          onClick: function () {
+            // End of the day: wipe per-day state and bounce to sign-in,
+            // mirroring the legacy Done behaviour.
+            try {
+              Object.keys(localStorage).forEach(function (k) {
+                if (k.indexOf("citizenGas.") === 0
+                  && k !== "citizenGas.engineerProfile"
+                  && k !== "citizenGas.queue") {
+                  localStorage.removeItem(k);
+                }
+              });
+              sessionStorage.removeItem("citizenGas.signinFresh");
+            } catch (e) {}
+            window.location.href = "/";
+          },
+        }],
       });
       return;
     }

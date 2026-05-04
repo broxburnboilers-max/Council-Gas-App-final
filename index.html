@@ -1441,7 +1441,21 @@
       });
     }
 
-    // Materials Used (engineer-only, do NOT emit to cert)
+    // Materials Used (engineer-only, do NOT emit to cert).
+    // FEATURE (Materials in daily email): preserve the engineer's MATERIALS
+    // USED section per property as both a raw text blob and a parsed list of
+    // line items, so the daily email body can summarise materials used.
+    var materialsBlock = getSection(txt, "MATERIALS USED");
+    var materialsList = [];
+    if (materialsBlock) {
+      // Split into non-empty trimmed lines. Engineer SPA typically writes one
+      // material per line or as "<qty> x <item>" / bullet style. We normalise
+      // by stripping leading bullets/dashes/numbering.
+      materialsBlock.split(/\r?\n/).forEach(function (ln) {
+        var t = ln.replace(/^\s*[-*•\d]+[\.\)]?\s*/, "").trim();
+        if (t) materialsList.push(t);
+      });
+    }
     // Documentation flags (engineer-only)
     return {
       certRef,
@@ -1453,6 +1467,8 @@
       fireAlarm: fireAlarm ? /yes/i.test(fireAlarm) : null,
       appliances,
       faults,
+      materialsBlock: materialsBlock || "",
+      materials: materialsList,
     };
   }
 
@@ -1740,6 +1756,9 @@
       signatureData: {},
       engineerData,
       photos: attachedPhotos.map(p => ({ label: p.label, dataUrl: p.dataUrl })),
+      // FEATURE (Materials in daily email): carry materials through to the cert
+      // so the email body / admin import / JSON download can list them.
+      materials: Array.isArray(prop.materials) ? prop.materials.slice() : [],
       savedAt: new Date().toISOString(),
     };
   }
@@ -1844,6 +1863,9 @@
             address2: prop.address2,
             postcode: prop.postcode,
             date: prop.date || todayStamp(),
+            // FEATURE (Materials in daily email): include any materials the
+            // engineer logged even on a no-access visit (e.g. card left).
+            materials: Array.isArray(prop.materials) ? prop.materials.slice() : [],
           });
         }
       } else {
@@ -2985,9 +3007,46 @@
       "Engineer: " + ((daybook && daybook.engineer && daybook.engineer.fullName) || "Andrew King-Page"),
       "Certificates: " + ((daybook && daybook.certs) || []).length,
       "No-access: " + ((daybook && daybook.noAccess) || []).length,
-      "",
-      "Sent from the Citizen Gas app.",
     ];
+
+    // FEATURE (Materials in daily email): append a per-property breakdown of
+    // the materials the engineer logged today, so the office can see at a
+    // glance what was used on each job without opening the JSON. If no
+    // materials were logged anywhere, emit a single "none recorded" line.
+    try {
+      var matLines = [];
+      var anyMaterials = false;
+      var allEntries = []
+        .concat((daybook && daybook.certs) || [])
+        .concat((daybook && daybook.noAccess) || []);
+      allEntries.forEach(function (entry) {
+        var mats = entry && entry.materials;
+        if (!Array.isArray(mats) || !mats.length) return;
+        anyMaterials = true;
+        // Resolve a readable address label depending on cert vs no-access shape.
+        var addr = "";
+        if (entry.certData) {
+          addr = [entry.certData.instAddr1, entry.certData.instAddr2, entry.certData.instPostcode]
+            .filter(Boolean).join(", ");
+        } else {
+          addr = [entry.address1, entry.address2, entry.postcode].filter(Boolean).join(", ");
+        }
+        if (!addr) addr = "(unknown address)";
+        matLines.push("");
+        matLines.push(addr + ":");
+        mats.forEach(function (m) { matLines.push("  \u2022 " + m); });
+      });
+      bodyLines.push("");
+      bodyLines.push("Materials used today:");
+      if (anyMaterials) {
+        bodyLines = bodyLines.concat(matLines);
+      } else {
+        bodyLines.push("  (none recorded)");
+      }
+    } catch (e) { /* never block the email on a materials-summary error */ }
+
+    bodyLines.push("");
+    bodyLines.push("Sent from the Citizen Gas app.");
     var mailto = "mailto:" + to
       + "?subject=" + encodeURIComponent(subject)
       + "&body=" + encodeURIComponent(bodyLines.join("\n"));

@@ -839,30 +839,46 @@
     return await doc.save();
   }
 
-  // Add an extra Download-with-photos button next to the existing one.
+  // Hijack the bundle's "Download PDF" button so EVERY cert PDF includes
+  // photos as additional pages whenever the active record has any.
+  // The bundle's default save produces a single-page landscape A4 with no
+  // photos. We replace that flow: when the user clicks Download PDF, we
+  // run our html2canvas+pdf-lib pipeline that always includes photo pages.
+  // If the record has no photos, we fall through to the bundle's default.
   function ensurePhotoDownloadBtn() {
-    // Find the bundle's Download PDF button on the preview screen.
     const buttons = [...document.querySelectorAll("button")];
     const dlBtn = buttons.find(b => /download pdf/i.test((b.textContent || "")));
     if (!dlBtn) return;
-    if (dlBtn.dataset.photoBtnAdded) return;
-    // Only show when the active record has photos.
-    const rec = getCurrentPreviewRecord();
-    if (!rec || !rec.photos || !rec.photos.length) return;
-
-    const wrap = dlBtn.parentElement;
-    if (!wrap) return;
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.textContent = "⬇ With Photos (" + rec.photos.length + ")";
-    btn.style.cssText = [
-      "background:#2a52d4", "color:#fff", "border:0", "border-radius:8px",
-      "padding:8px 12px", "margin-left:8px",
-      "font:700 13px/1 ui-sans-serif,system-ui,sans-serif", "cursor:pointer",
-    ].join(";");
-    btn.addEventListener("click", () => downloadWithPhotos(rec));
-    dlBtn.dataset.photoBtnAdded = "1";
-    dlBtn.insertAdjacentElement("afterend", btn);
+    if (dlBtn.dataset.photoHijacked) return;
+    dlBtn.dataset.photoHijacked = "1";
+    // Capture-phase listener so we run BEFORE the bundle's React onClick.
+    dlBtn.addEventListener(
+      "click",
+      function (ev) {
+        const rec = getCurrentPreviewRecord();
+        if (!rec || !rec.photos || !rec.photos.length) {
+          // No photos: let the bundle's default Download PDF run.
+          return;
+        }
+        // Photos exist — take over.
+        ev.preventDefault();
+        ev.stopImmediatePropagation();
+        ev.stopPropagation();
+        downloadWithPhotos(rec);
+      },
+      true // capture
+    );
+    // Also annotate the button so the user can see how many photos will be appended.
+    try {
+      const rec = getCurrentPreviewRecord();
+      if (rec && rec.photos && rec.photos.length && !dlBtn.dataset.photoCountShown) {
+        dlBtn.dataset.photoCountShown = "1";
+        const badge = document.createElement("span");
+        badge.textContent = " (+ " + rec.photos.length + " photo" + (rec.photos.length === 1 ? "" : "s") + ")";
+        badge.style.cssText = "font-size:11px;font-weight:600;opacity:0.85;margin-left:4px;";
+        dlBtn.appendChild(badge);
+      }
+    } catch (e) {}
   }
 
   async function downloadWithPhotos(rec) {
@@ -890,19 +906,46 @@
   }
 
   // Build the cert-page PDF by rasterising the visible preview DOM.
+  // Mirrors the bundle's own `Cf` flow: forces the preview to 1200px wide
+  // before snapshotting so the cert renders at full landscape A4 width.
   async function buildCertPdfFromPreview() {
     await loadHtml2CanvasIfNeeded();
     await loadJsPdfIfNeeded();
     const target = findCertPreviewElement();
     if (!target) throw new Error("Could not find cert preview");
-    const canvas = await window.html2canvas(target, { scale: 2, backgroundColor: "#fff", useCORS: true });
-    const imgData = canvas.toDataURL("image/jpeg", 0.92);
-    const pdf = new window.jspdf.jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    const pageHeight = pdf.internal.pageSize.getHeight();
-    const ratio = Math.min(pageWidth / canvas.width, pageHeight / canvas.height);
-    const w = canvas.width * ratio, h = canvas.height * ratio;
-    pdf.addImage(imgData, "JPEG", (pageWidth - w) / 2, (pageHeight - h) / 2, w, h);
+    // Match the bundle's stretch: width 1200px, then capture full scrollHeight.
+    const W = 1200;
+    const prev = { w: target.style.width, mw: target.style.maxWidth, mn: target.style.minWidth };
+    target.style.width = W + "px";
+    target.style.maxWidth = W + "px";
+    target.style.minWidth = W + "px";
+    await new Promise(r => setTimeout(r, 200));
+    const canvas = await window.html2canvas(target, {
+      scale: 2,
+      useCORS: true,
+      logging: false,
+      backgroundColor: "#fff",
+      width: W,
+      height: target.scrollHeight,
+      windowWidth: W,
+      scrollX: 0,
+      scrollY: 0,
+    });
+    target.style.width = prev.w;
+    target.style.maxWidth = prev.mw;
+    target.style.minWidth = prev.mn;
+    const imgData = canvas.toDataURL("image/jpeg", 0.97);
+    const pdf = new window.jspdf.jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+    const pageW = 297, pageH = 210;
+    const aspect = canvas.width / canvas.height;
+    const pageAspect = pageW / pageH;
+    let dw, dh, dx, dy;
+    if (aspect > pageAspect) {
+      dw = pageW; dh = pageW / aspect; dx = 0; dy = (pageH - dh) / 2;
+    } else {
+      dh = pageH; dw = pageH * aspect; dy = 0; dx = (pageW - dw) / 2;
+    }
+    pdf.addImage(imgData, "JPEG", dx, dy, dw, dh);
     return pdf.output("arraybuffer");
   }
 

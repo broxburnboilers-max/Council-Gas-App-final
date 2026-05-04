@@ -422,7 +422,15 @@
       parts.push("Imported " + certs + " cert" + (certs === 1 ? "" : "s"));
       if (dups) parts.push(dups + " skipped (already imported)");
       if (na) parts.push(na + " no-access logged");
-      showLog(parts.join(" · "), "#2a52d4");
+      showLog(parts.join(" · ") + " — refreshing…", "#2a52d4");
+      // CRITICAL: the React bundle keeps gsc_records in local state and writes it
+      // back on every render — it would clobber the localStorage we just wrote.
+      // Force a full reload so React re-initializes from the fresh localStorage.
+      // Persist a one-shot toast across reload via sessionStorage.
+      try {
+        sessionStorage.setItem("gs_import_toast", parts.join(" · "));
+      } catch (e) {}
+      setTimeout(() => { window.location.reload(); }, 600);
     };
     reader.onerror = () => showLog("Could not read file.", "#c0392b");
     reader.readAsText(f);

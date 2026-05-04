@@ -384,14 +384,14 @@
           var prefillText = prefill.filter(Boolean).join("\n");
           box.innerHTML =
             '<h4>' + DAY_NAMES[i] + ' <span class="date">' + dateLabel + ' · ' + key + '</span></h4>' +
-            '<textarea class="week-paste" data-day="' + key + '" rows="4" ' +
+            '<textarea class="week-paste" data-day="' + key + '" rows="6" ' +
               'placeholder="1 Pass Lane, Broxburn, EH52 1AA' + "\n" +
               '2 Fault Street, Broxburn, EH52 1BB' + "\n" +
               '3 Cooker Court, Broxburn, EH52 1CC' + "\n" +
               '4 Fire Road, Broxburn, EH52 1DD">' +
               escapeHtml(prefillText) +
             '</textarea>' +
-            '<p class="week-hint">Paste up to 4 addresses, one per line.</p>';
+            '<p class="week-hint">Paste as many addresses as you need, one per line.</p>';
           weekGrid.appendChild(box);
         }
       }
@@ -427,19 +427,14 @@
           if (!slotId) { toast("Pick an engineer", true); return; }
           var areas = weekGrid.querySelectorAll('textarea.week-paste');
           var days = {};
-          var tooMany = false;
           areas.forEach(function (ta) {
             var key = ta.getAttribute("data-day");
             var lines = (ta.value || "")
               .split(/\r?\n/)
               .map(function (l) { return l.trim(); })
               .filter(Boolean);
-            if (lines.length > 4) tooMany = true;
-            if (lines.length) days[key] = lines.slice(0, 4);
+            if (lines.length) days[key] = lines;
           });
-          if (tooMany) {
-            if (!confirm("One or more days has more than 4 addresses. Only the first 4 of each day will be saved. Continue?")) return;
-          }
           if (!Object.keys(days).length) {
             if (!confirm("No addresses entered. Save an empty week (clears this engineer's upcoming jobs)?")) return;
           }

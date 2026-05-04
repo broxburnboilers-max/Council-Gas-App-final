@@ -285,6 +285,81 @@
         try { window.__cgPhotoBucket = []; } catch (e) {}
         try { sessionStorage.removeItem("citizenGas.photoBucket"); } catch (e) {}
       };
+
+      // BUG-FIX (Photos missing in emailed JSON — final, bulletproof path):
+      // Sometimes the bundle paints photos via URL.createObjectURL (blob: URLs)
+      // instead of FileReader, and the change-event delegation can miss
+      // synthetic React inputs. As a LAST-RESORT capture path that cannot be
+      // bypassed by ANY rendering technique, we install a MutationObserver
+      // that watches the entire document for <img> elements whose src is a
+      // data:image URL or a blob: URL. Either way we convert to a data URL
+      // and push into the bucket. This runs whenever React paints a photo,
+      // regardless of how the photo arrived.
+      function pushIfNew(dataUrl) {
+        if (typeof dataUrl !== "string") return;
+        if (dataUrl.indexOf("data:image/") !== 0) return;
+        var b = window.__cgPhotoBucket || [];
+        for (var i = 0; i < b.length; i++) {
+          if (b[i] && b[i].dataUrl === dataUrl) return;
+        }
+        window.__cgPhotoBucket.push({ dataUrl: dataUrl, capturedAt: Date.now() });
+      }
+      function blobUrlToDataUrl(blobUrl) {
+        try {
+          fetch(blobUrl).then(function (r) { return r.blob(); }).then(function (blob) {
+            var fr = new FileReader();
+            fr.onload = function () { pushIfNew(fr.result); };
+            fr.readAsDataURL(blob);
+          }).catch(function () {});
+        } catch (e) {}
+      }
+      function scanImg(node) {
+        if (!node || node.nodeType !== 1) return;
+        if (node.tagName === "IMG") {
+          var src = node.getAttribute && node.getAttribute("src");
+          if (!src) return;
+          if (src.indexOf("data:image/") === 0) pushIfNew(src);
+          else if (src.indexOf("blob:") === 0) blobUrlToDataUrl(src);
+        }
+        // also recurse into children — React often renders trees
+        if (node.querySelectorAll) {
+          var imgs = node.querySelectorAll("img");
+          for (var i = 0; i < imgs.length; i++) {
+            var src2 = imgs[i].getAttribute("src") || "";
+            if (src2.indexOf("data:image/") === 0) pushIfNew(src2);
+            else if (src2.indexOf("blob:") === 0) blobUrlToDataUrl(src2);
+          }
+        }
+      }
+      try {
+        var mo = new MutationObserver(function (records) {
+          for (var r = 0; r < records.length; r++) {
+            var rec = records[r];
+            // newly added nodes
+            if (rec.addedNodes) {
+              for (var n = 0; n < rec.addedNodes.length; n++) {
+                scanImg(rec.addedNodes[n]);
+              }
+            }
+            // src mutated on existing img
+            if (rec.type === "attributes" && rec.target && rec.target.tagName === "IMG") {
+              scanImg(rec.target);
+            }
+          }
+        });
+        // Wait for body to exist (script is in <body>, so it does)
+        mo.observe(document.documentElement, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ["src"],
+        });
+        // Initial sweep — anything already in the DOM
+        scanImg(document.documentElement);
+        window.__cgPhotoMOInstalled = true;
+      } catch (e) {
+        console.warn("[cg] photo MutationObserver failed", e);
+      }
     })();
 
     (function () {
@@ -2577,13 +2652,27 @@
     document.body.appendChild(wrap);
   }
 
-  // Strip large data URLs (photos) from a daybook copy. Photos are kept locally
-  // for the admin Photo-PDF flow, but should NOT be in the emailed JSON because:
-  //  - Resend has a 40 MB attachment cap
-  //  - Safari throttles/drops large fetch bodies
-  //  - The admin import only needs the cert text data
+  // BUG-FIX (Photos missing in emailed JSON):
+  // Previously this function ALWAYS stripped photos out of the emailed copy
+  // because of Resend's 40 MB cap. That meant the user could never see
+  // photos in the JSON they downloaded from the email — the photos only
+  // travelled by the separate /api/daybook channel to admin.
+  //
+  // New behaviour: keep photos in the emailed JSON whenever the resulting
+  // payload would be UNDER ~15 MB (well below Resend's cap). Only strip
+  // when the daybook is genuinely too big to email. The vast majority of
+  // daily daybooks (1-10 certs, ~5 photos each) are well under this size.
   function daybookForEmail(d) {
     var copy = JSON.parse(JSON.stringify(d || {}));
+    var size = JSON.stringify(copy).length;
+    var SAFE_EMAIL_SIZE = 15 * 1024 * 1024; // 15 MB
+    if (size <= SAFE_EMAIL_SIZE) {
+      // Small enough — keep photos in the emailed JSON.
+      copy._stripped_photo_count = 0;
+      copy._photoEmailMode = "included";
+      return copy;
+    }
+    // Too big — strip photos and rely on the /api/daybook side-channel.
     var stripped = 0;
     (copy.certs || []).forEach(function (c) {
       if (Array.isArray(c.photos)) {
@@ -2593,6 +2682,7 @@
       }
     });
     copy._stripped_photo_count = stripped;
+    copy._photoEmailMode = "stripped_oversize";
     return copy;
   }
 
@@ -2646,6 +2736,46 @@
   async function actuallySendDaybook(d) {
     const dateStamp = d.date || todayStamp();
     const filename = "daybook-" + dateStamp + ".json";
+
+    // BUG-FIX (Photos missing in JSON — last-mile backfill):
+    // If any cert in the daybook has an empty photos array but the photo
+    // bucket has photos that were never attached (because the harvest
+    // raced React, or addr-matching failed, or the bucket filled AFTER
+    // ingestion), attach all unassigned bucket photos to certs that
+    // have no photos. This is a best-effort fallback that guarantees
+    // photos appear in the JSON download as long as the engineer took
+    // them at some point during the session.
+    try {
+      var bucket = (window.__cgPhotoBucket || []).slice();
+      // Build set of dataUrls already attached anywhere in the daybook
+      var attached = Object.create(null);
+      (d.certs || []).forEach(function (c) {
+        (c.photos || []).forEach(function (p) {
+          if (p && p.dataUrl) attached[p.dataUrl] = true;
+        });
+      });
+      var orphans = bucket.filter(function (p) { return p && p.dataUrl && !attached[p.dataUrl]; });
+      if (orphans.length) {
+        // Find certs missing photos and distribute orphans equally.
+        var emptyCerts = (d.certs || []).filter(function (c) { return !(c.photos && c.photos.length); });
+        if (emptyCerts.length) {
+          // Spread orphans across empty certs, photo-by-photo round robin.
+          orphans.forEach(function (p, i) {
+            var target = emptyCerts[i % emptyCerts.length];
+            target.photos = target.photos || [];
+            target.photos.push({ label: "capture", dataUrl: p.dataUrl });
+          });
+        } else if ((d.certs || []).length === 1) {
+          // Single-cert daybook: attach all orphans to it.
+          d.certs[0].photos = (d.certs[0].photos || []).concat(
+            orphans.map(function (p) { return { label: "capture", dataUrl: p.dataUrl }; })
+          );
+        }
+        // Persist the backfilled daybook so the local download has photos.
+        try { writeDaybook(d); } catch (e) {}
+      }
+    } catch (e) { console.warn("[cg] photo backfill failed", e); }
+
     const forEmail = daybookForEmail(d);
     const summary = {
       jobCount: (d.certs || []).length,

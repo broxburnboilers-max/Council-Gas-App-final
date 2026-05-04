@@ -13,25 +13,52 @@
          at a folder named after its issue date (DD/MM/YYYY). -->
     <script>
       (function () {
-        function fmtDate(raw) {
-          var d = new Date(raw);
-          if (isNaN(d.getTime())) {
-            var m = String(raw).match(/^(\d{2})\/(\d{2})\/(\d{4})/);
-            if (m) return String(raw).slice(0, 10);
-            d = new Date();
-          }
+        // Pre-React folder sweeper. Mirrors folderNameForRecord() in the
+        // post-bundle script below — keep these two in sync.
+        // Priority: engineerData.certDate (truth) → finalChecks.inspectionDate
+        // (work_date + 1y) → legacy fields → savedAt (worst, = today).
+        function fmtDateFromIso(iso) {
+          var d = new Date(iso);
+          if (isNaN(d.getTime())) return null;
           var dd = String(d.getUTCDate()).padStart(2, "0");
           var mm = String(d.getUTCMonth() + 1).padStart(2, "0");
           var yy = d.getUTCFullYear();
           return dd + "/" + mm + "/" + yy;
         }
-        function dateOf(rec) {
-          return (rec && rec.certData && rec.certData.issueDate)
-              || (rec && rec.certData && rec.certData.inspectionDate)
-              || (rec && rec.signatureData && rec.signatureData.issuedByDate)
-              || (rec && rec.savedAt)
-              || new Date().toISOString();
+        function folderNameFor(rec) {
+          var eng = rec && rec.engineerData && rec.engineerData.certDate;
+          if (eng) {
+            var s = fmtDateFromIso(eng);
+            if (s) return s;
+          }
+          var fci = rec && rec.finalChecks && rec.finalChecks.inspectionDate;
+          if (fci) {
+            var d = new Date(fci);
+            if (!isNaN(d.getTime())) {
+              var work = new Date(Date.UTC(d.getUTCFullYear() - 1, d.getUTCMonth(), d.getUTCDate(), 12, 0, 0));
+              var dd = String(work.getUTCDate()).padStart(2, "0");
+              var mm = String(work.getUTCMonth() + 1).padStart(2, "0");
+              var yy = work.getUTCFullYear();
+              return dd + "/" + mm + "/" + yy;
+            }
+          }
+          var raw = (rec && rec.certData && rec.certData.issueDate)
+                 || (rec && rec.certData && rec.certData.inspectionDate)
+                 || (rec && rec.signatureData && rec.signatureData.issuedByDate)
+                 || (rec && rec.savedAt)
+                 || new Date().toISOString();
+          var d2 = new Date(raw);
+          if (isNaN(d2.getTime())) {
+            var m = String(raw).match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+            if (m) return String(raw).slice(0, 10);
+            d2 = new Date();
+          }
+          var dd2 = String(d2.getUTCDate()).padStart(2, "0");
+          var mm2 = String(d2.getUTCMonth() + 1).padStart(2, "0");
+          var yy2 = d2.getUTCFullYear();
+          return dd2 + "/" + mm2 + "/" + yy2;
         }
+        function dateRegex() { return /^\d{2}\/\d{2}\/\d{4}$/; }
         try {
           var recs = JSON.parse(localStorage.getItem("gsc_records") || "[]");
           var folders = JSON.parse(localStorage.getItem("gsc_folders") || "[]");
@@ -39,8 +66,15 @@
           var changed = false;
           for (var i = 0; i < recs.length; i++) {
             var r = recs[i];
-            if (!r || r.gscFolder) continue;
-            var name = fmtDate(dateOf(r));
+            if (!r) continue;
+            var name = folderNameFor(r);
+            // Re-file logic: leave manually-moved records alone, but move
+            // legacy date-folder records into the correct work-date folder.
+            if (r.gscFolder) {
+              var cur = folders.find(function (x) { return x && x.id === r.gscFolder; });
+              if (cur && cur.name === name) continue;
+              if (cur && !dateRegex().test(cur.name || "")) continue;  // manual
+            }
             var f = folders.find(function (x) { return x && x.name === name; });
             var fid;
             if (f) {
@@ -49,7 +83,23 @@
               fid = "f_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6);
               folders.push({ id: fid, name: name });
             }
-            r.gscFolder = fid;
+            if (r.gscFolder !== fid) {
+              r.gscFolder = fid;
+              changed = true;
+            }
+          }
+          // Prune empty date-named folders.
+          var used = {};
+          for (var k = 0; k < recs.length; k++) {
+            if (recs[k] && recs[k].gscFolder) used[recs[k].gscFolder] = 1;
+          }
+          var pruned = folders.filter(function (f) {
+            if (!f) return false;
+            if (!dateRegex().test(f.name || "")) return true;  // keep manual
+            return !!used[f.id];
+          });
+          if (pruned.length !== folders.length) {
+            folders = pruned;
             changed = true;
           }
           if (changed) {

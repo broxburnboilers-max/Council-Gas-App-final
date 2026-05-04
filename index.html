@@ -2778,7 +2778,7 @@
       title: "Send today's daybook?",
       message: certCount + " cert" + (certCount === 1 ? "" : "s") +
         (naCount ? ", " + naCount + " no-access" : "") +
-        "\nWill be emailed to broxburnboilers@gmail.com.",
+        "\nWill be emailed to broxburnboilers@gmail.com and lspapandh@gmail.com.",
       buttons: [
         { label: "Cancel" },
         { label: "Send", primary: true, onClick: function () { actuallySendDaybook(d); } },
@@ -2916,7 +2916,7 @@
       refreshDaybookButton();
       showStatusModal({
         title: "Sent \u2713",
-        message: "Daybook emailed to broxburnboilers@gmail.com.\nA copy also saved to Downloads as " + filename + ".",
+        message: "Daybook emailed to broxburnboilers@gmail.com and lspapandh@gmail.com (photos included).\nA copy of the JSON also saved to Downloads as " + filename + ".",
         buttons: [{
           label: "Done", primary: true,
           onClick: function () {
@@ -2996,12 +2996,13 @@
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     }, 1000);
-    // BUG-FIX (Task 4 — mailto handoff):
-    // After the JSON downloads to the engineer's phone, open the device
-    // mail client with To/Subject/Body prefilled so they only have to
-    // attach the just-downloaded file and hit Send. Recipient and date are
-    // injected so the engineer can never forget where to send the daybook.
-    try { openDaybookMailto(daybook, filename); } catch (e) {}
+    // CHANGE (auto-send to all recipients): the manual mailto handoff is
+    // disabled. The Resend email sent by /api/send-daybook now goes to BOTH
+    // broxburnboilers@gmail.com AND lspapandh@gmail.com automatically with
+    // photos inline + JSON attached. The engineer no longer needs to do
+    // anything after pressing Send Daybook. Function kept (unused) for now
+    // in case the email path needs a fallback later.
+    // try { openDaybookMailto(daybook, filename); } catch (e) {}
   }
 
   function openDaybookMailto(daybook, filename) {

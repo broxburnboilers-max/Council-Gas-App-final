@@ -25,7 +25,11 @@ exports.handler = async function (event) {
   }
 
   const RESEND_KEY = process.env.RESEND_API_KEY || "";
-  const TO = process.env.DAYBOOK_TO || "broxburnboilers@gmail.com";
+  // Send the daily daybook email to BOTH recipients automatically so the
+  // engineer doesn't have to manually forward anything. DAYBOOK_TO env var
+  // can be a single address or comma-separated list.
+  const TO_ENV = process.env.DAYBOOK_TO || "broxburnboilers@gmail.com,lspapandh@gmail.com";
+  const TO = TO_ENV.split(",").map(function (s) { return s.trim(); }).filter(Boolean);
   const FROM = process.env.DAYBOOK_FROM || "Citizen Gas <onboarding@resend.dev>";
 
   if (!RESEND_KEY) {
@@ -65,6 +69,11 @@ exports.handler = async function (event) {
     const address = cert.certData
       ? [cert.certData.instAddr1, cert.certData.instAddr2, cert.certData.instPostcode].filter(Boolean).join(", ")
       : "";
+    // Build a short, filesystem-safe address slug for the filename so the
+    // photo file names alone make it clear which job they belong to.
+    const addrSlug = (cert.certData && cert.certData.instAddr1)
+      ? String(cert.certData.instAddr1).replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40)
+      : "";
     (cert.photos || []).forEach(function (photo, photoIdx) {
       if (!photo || !photo.dataUrl) return;
       const m = String(photo.dataUrl).match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
@@ -72,23 +81,38 @@ exports.handler = async function (event) {
       const mime = m[1];
       const b64 = m[2];
       const ext = mime === "image/png" ? "png" : (mime === "image/webp" ? "webp" : "jpg");
-      const safeLabel = String(photo.label || ("photo" + (photoIdx + 1))).replace(/[^A-Za-z0-9_-]/g, "_");
-      const fname = safeRef + "_" + safeLabel + "_" + (photoIdx + 1) + "." + ext;
-      const contentId = safeRef + "_p" + (photoIdx + 1) + "@citizengas";
-      // Approximate bytes: base64 is ~4/3 of binary, but we send base64 in JSON.
+      // Photo description: prefer engineer-provided label, else use "photo N".
+      // The MutationObserver path uses the placeholder label "capture" — in
+      // that case fall back to a numbered label so the user sees something
+      // meaningful instead of three identical "capture" lines.
+      var rawLabel = photo.label && photo.label !== "capture"
+        ? String(photo.label)
+        : ("Photo " + (photoIdx + 1));
+      const safeLabel = rawLabel.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 40);
+      // Filename pattern: <CertRef>_<AddressSlug>_<N>_<Label>.<ext>
+      // Example: GSC123_12-Materials-Way_1_Boiler-front.jpg
+      const numStr = String(photoIdx + 1).padStart(2, "0");
+      const fnameParts = [safeRef];
+      if (addrSlug) fnameParts.push(addrSlug);
+      fnameParts.push(numStr);
+      fnameParts.push(safeLabel);
+      const fname = fnameParts.join("_") + "." + ext;
+      const contentId = safeRef + "_p" + numStr + "@citizengas";
       const approxBytes = b64.length;
       if (usedBytes + approxBytes > RESEND_BYTE_CAP) {
-        droppedPhotos.push({ certRef, label: photo.label || ("photo " + (photoIdx + 1)), address });
+        droppedPhotos.push({ certRef, label: rawLabel, address, photoNum: photoIdx + 1 });
         return;
       }
       usedBytes += approxBytes;
       photoAttachments.push({
         filename: fname,
         content: b64,
-        content_id: contentId, // Resend supports this for inline rendering
+        content_id: contentId,
         type: mime,
         certRef,
-        label: photo.label || ("photo " + (photoIdx + 1)),
+        label: rawLabel,
+        photoNum: photoIdx + 1,
+        totalForCert: (cert.photos || []).length,
         address,
       });
     });
@@ -150,8 +174,20 @@ exports.handler = async function (event) {
   lines.push("");
   lines.push("=== PHOTOS ===");
   if (photoAttachments.length) {
+    // Group by cert in plain text too, so the labels are clear.
+    const ptByCert = {};
     photoAttachments.forEach(function (p) {
-      lines.push("- " + p.filename + " — " + (p.address || p.certRef));
+      const k = p.certRef + "|" + p.address;
+      if (!ptByCert[k]) ptByCert[k] = { certRef: p.certRef, address: p.address, photos: [] };
+      ptByCert[k].photos.push(p);
+    });
+    Object.keys(ptByCert).forEach(function (k) {
+      const grp = ptByCert[k];
+      lines.push("");
+      lines.push("Cert " + grp.certRef + " — " + (grp.address || "(no address)"));
+      grp.photos.forEach(function (p) {
+        lines.push("  Photo " + p.photoNum + " of " + p.totalForCert + " — " + p.label + " [" + p.filename + "]");
+      });
     });
   } else {
     lines.push("(no photos)");
@@ -188,7 +224,7 @@ exports.handler = async function (event) {
     htmlParts.push('<h3 style="margin:18px 0 6px;">Materials used</h3>');
     htmlParts.push('<div style="white-space:pre-wrap;background:#f8fafc;padding:10px 12px;border-radius:8px;border:1px solid #e2e8f0;font-size:13px;">' + esc(matLines.join("\n").trim()) + '</div>');
   }
-  // Group photos by certRef
+  // Group photos by certRef so each property's photos appear together.
   if (photoAttachments.length) {
     htmlParts.push('<h3 style="margin:24px 0 8px;">Photos</h3>');
     const byCert = {};
@@ -199,14 +235,27 @@ exports.handler = async function (event) {
     });
     Object.keys(byCert).forEach(function (key) {
       const grp = byCert[key];
-      htmlParts.push('<div style="margin:14px 0 6px;font-weight:700;">' + esc(grp.address || grp.certRef) + '</div>');
+      // Heading shows BOTH cert ref and address — every photo block is
+      // unambiguous about which gas safety certificate it belongs to.
+      htmlParts.push(
+        '<div style="margin:18px 0 8px;padding:10px 12px;background:#f1f5f9;border-radius:8px;border-left:4px solid #2a52d4;">' +
+          '<div style="font-weight:800;font-size:14px;color:#1a2330;">Cert ' + esc(grp.certRef) + '</div>' +
+          (grp.address ? '<div style="font-size:13px;color:#475569;margin-top:2px;">' + esc(grp.address) + '</div>' : '') +
+          '<div style="font-size:12px;color:#64748b;margin-top:2px;">' + grp.photos.length + ' photo' + (grp.photos.length === 1 ? '' : 's') + '</div>' +
+        '</div>'
+      );
       htmlParts.push('<div>');
       grp.photos.forEach(function (p) {
+        // Caption pattern: "Photo N of M — <label>" so each image is clearly
+        // identified. Filename also shown in a smaller line for download cross-ref.
+        var caption = 'Photo ' + p.photoNum + ' of ' + p.totalForCert +
+                      ' — ' + esc(p.label);
         htmlParts.push(
-          '<div style="display:inline-block;margin:0 10px 10px 0;vertical-align:top;">' +
-            '<img src="cid:' + esc(p.content_id) + '" alt="' + esc(p.label) + '" ' +
-              'style="display:block;max-width:280px;max-height:280px;border-radius:6px;border:1px solid #e2e8f0;" />' +
-            '<div style="font-size:11px;color:#64748b;margin-top:3px;">' + esc(p.label) + '</div>' +
+          '<div style="display:inline-block;margin:0 10px 14px 0;vertical-align:top;width:280px;">' +
+            '<img src="cid:' + esc(p.content_id) + '" alt="' + esc(grp.certRef + ' ' + p.label) + '" ' +
+              'style="display:block;width:100%;max-width:280px;max-height:280px;object-fit:cover;border-radius:8px;border:1px solid #e2e8f0;" />' +
+            '<div style="font-size:12px;color:#1a2330;margin-top:6px;font-weight:600;">' + caption + '</div>' +
+            '<div style="font-size:10px;color:#94a3b8;margin-top:2px;font-family:ui-monospace,monospace;word-break:break-all;">' + esc(p.filename) + '</div>' +
           '</div>'
         );
       });
@@ -255,7 +304,7 @@ exports.handler = async function (event) {
     },
     body: JSON.stringify({
       from: FROM,
-      to: [TO],
+      to: TO,
       subject: subject,
       text: textBody,
       html: htmlBody,

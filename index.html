@@ -2886,6 +2886,137 @@
       }
     } catch (e) { console.warn("[cg] photo backfill failed", e); }
 
+    // ─── Drive photo upload pass ────────────────────────────────────────
+    // BUG-FIX (Daybook too big to send — May 2026):
+    // Previously every photo was kept as a base64 data URL inside the
+    // daybook JSON.  At ~250–400 KB per photo (after base64 overhead) and
+    // a typical 5 photos per cert × 12 certs = 60 photos, the daybook
+    // ballooned past 130 MB — far above Netlify Functions' 6 MB request
+    // body limit.  Both /api/send-daybook and /api/daybook silently failed
+    // with "Failed to fetch".  The admin then never saw the certs.
+    //
+    // New behaviour: upload each photo individually to a shared Google
+    // Drive folder (via /api/upload-photo, which uses a server-side service
+    // account).  Replace each photo's dataUrl with a small
+    // { driveFileId, label, filename, mimeType } reference.  The daybook
+    // JSON shrinks to ~50 KB and rides through the existing channels with
+    // no chunking required.  The admin lazy-loads photos via /api/get-photo
+    // when rendering certs.
+    //
+    // Failure handling: if Drive uploads fail we KEEP the original dataUrl
+    // so the local downloaded JSON (the engineer's safety net) and the
+    // /api/send-daybook email path still have photos.  Only /api/daybook
+    // (admin import) is degraded in that case, and the admin's existing
+    // localStorage import path is left as the secondary fallback.
+    showStatusModal({
+      title: "Uploading photos…",
+      message: "Sending photos to the office Drive. Don't close this page.",
+      buttons: [],
+    });
+    try {
+      // Collect every photo across every cert into a flat list so we can
+      // run uploads with bounded concurrency.
+      const photoTasks = [];
+      (d.certs || []).forEach(function (cert, certIdx) {
+        const certRef = (cert.certData && cert.certData.certRef) || ("cert" + (certIdx + 1));
+        const addrSlug = (cert.certData && cert.certData.instAddr1)
+          ? String(cert.certData.instAddr1).replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40)
+          : "";
+        const safeRef = String(certRef).replace(/[^A-Za-z0-9_-]/g, "_");
+        (cert.photos || []).forEach(function (photo, photoIdx) {
+          if (!photo || !photo.dataUrl) return;
+          // Skip photos that already have a driveFileId (re-send case).
+          if (photo.driveFileId) return;
+          const m = String(photo.dataUrl).match(/^data:([^;]+);base64,(.+)$/);
+          if (!m) return;
+          const mimeType = m[1];
+          const ext = mimeType === "image/png" ? "png" : (mimeType === "image/webp" ? "webp" : "jpg");
+          const labelSlug = (photo.label && photo.label !== "capture")
+            ? String(photo.label).replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 40)
+            : ("Photo_" + (photoIdx + 1));
+          const filename = [safeRef, addrSlug, String(photoIdx + 1).padStart(2, "0"), labelSlug]
+            .filter(Boolean).join("_") + "." + ext;
+          photoTasks.push({ certIdx: certIdx, photoIdx: photoIdx, certRef: certRef,
+                            filename: filename, mimeType: mimeType, base64: m[2],
+                            label: photo.label || "" });
+        });
+      });
+
+      // Bounded-concurrency runner: 4 uploads in flight at once. Phones
+      // on cellular connections handle this comfortably and it lets a
+      // 60-photo daybook finish in ~10–20 s instead of ~60 s.
+      const CONCURRENCY = 4;
+      let uploaded = 0, failed = 0;
+      let cursor = 0;
+      async function uploadOne(task) {
+        try {
+          const resp = await fetch("/api/upload-photo", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              certRef: task.certRef,
+              filename: task.filename,
+              mimeType: task.mimeType,
+              base64: task.base64,
+            }),
+          });
+          if (!resp.ok) { failed++; return; }
+          const data = await resp.json().catch(function () { return {}; });
+          if (!data || !data.fileId) { failed++; return; }
+          // Replace the in-memory photo entry with a slim Drive reference.
+          // Keep the label and filename so the email/PDF code still has
+          // human-readable context.
+          const cert = d.certs[task.certIdx];
+          if (cert && cert.photos && cert.photos[task.photoIdx]) {
+            cert.photos[task.photoIdx] = {
+              label: task.label,
+              filename: task.filename,
+              mimeType: task.mimeType,
+              driveFileId: data.fileId,
+              webViewLink: data.webViewLink || null,
+            };
+          }
+          uploaded++;
+        } catch (e) { failed++; }
+      }
+      async function worker() {
+        while (true) {
+          const i = cursor++;
+          if (i >= photoTasks.length) return;
+          await uploadOne(photoTasks[i]);
+          // Update the modal occasionally so the engineer sees progress.
+          if ((uploaded + failed) % 3 === 0) {
+            try {
+              showStatusModal({
+                title: "Uploading photos…",
+                message: (uploaded + failed) + " of " + photoTasks.length + " done" +
+                  (failed ? " (" + failed + " failed — JSON download is your backup)" : ""),
+                buttons: [],
+              });
+            } catch (e) {}
+          }
+        }
+      }
+      const workers = [];
+      for (let i = 0; i < CONCURRENCY; i++) workers.push(worker());
+      await Promise.all(workers);
+
+      // Persist the slimmed daybook so a refresh after this point doesn't
+      // re-upload the same photos.
+      try { writeDaybook(d); } catch (e) {}
+
+      if (failed > 0) {
+        console.warn("[cg] " + failed + " of " + photoTasks.length + " photo uploads failed");
+      }
+    } catch (e) {
+      // Drive layer failed entirely — fall through. The downstream send
+      // path will still try to email/queue whatever's in d (with original
+      // dataUrls intact, which means the existing too-big behaviour will
+      // re-appear, but the local JSON download is still produced).
+      console.warn("[cg] photo Drive upload pass failed", e);
+    }
+    // ────────────────────────────────────────────────────────────────────
+
     const forEmail = daybookForEmail(d);
     const summary = {
       jobCount: (d.certs || []).length,

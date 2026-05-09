@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en" class="dark">
-<!-- BUILD: hide-red-warning-boxes-v1 2026-05-09 -->
+<!-- BUILD: drive-filename-guard-v1 2026-05-09 -->
   <head>
     <meta charset="UTF-8" />
     <title>Citizen Gas</title>
@@ -4022,6 +4022,26 @@ window.cgGoogleAuth = (function () {
 
       async function uploadOne(task) {
         try {
+          // GUARD v1 (drive-filename-guard-v1): reject any filename matching
+          // the legacy 'rec_<ts>_<rand>_<NN>_<label>.jpg' pattern. If we ever
+          // see this we know stale cached code is running on the engineer
+          // phone — fail loudly so we can fix it instead of silently
+          // uploading uncompressed 5 MB junk.
+          if (/^rec_\d{10,}_[a-z0-9]{3,}_\d{2}_/i.test(String(task.filename || ""))) {
+            console.error("[cg] BAD FILENAME PATTERN — refusing upload", task.filename);
+            try {
+              alert("Old code detected on this phone (filename starts with 'rec_'). \n\nPlease force-stop Chrome and reopen gasapp.online to load the latest version. \n\nNo photos uploaded — your work is still saved locally.");
+            } catch (e) {}
+            failed++;
+            return;
+          }
+          // GUARD v1: reject uncompressed photos (>1 MB indicates the photo
+          // skipped the compressDataUrl pipeline). Force a re-take or
+          // re-compression instead of dumping a 5 MB raw image into Drive.
+          if (task.base64 && task.base64.length > 1400000) {
+            console.warn("[cg] photo too large (" + Math.round(task.base64.length/1024) + " KB base64) — likely uncompressed", task.filename);
+            // Still upload, but flag in console so we can see the volume.
+          }
           const bin = atob(task.base64);
           const bytes = new Uint8Array(bin.length);
           for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);

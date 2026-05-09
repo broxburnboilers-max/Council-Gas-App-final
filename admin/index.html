@@ -669,6 +669,19 @@
       const certs = result.imported || 0;
       const dups  = result.duplicates || 0;
       const na    = result.noAccess || 0;
+      // BUG-FIX ("Imported N certs" lied when localStorage write failed):
+      // If the records couldn't be persisted (typically because the JSON
+      // included photos as data URLs and exceeded the browser quota), tell
+      // the user honestly. Don't reload — reload would just show an empty
+      // Records folder again.
+      if (result.saveOk === false) {
+        showLog(
+          "Could not save records: " + (result.saveErr || "storage full") +
+          ". Photos in this JSON are too big for the browser. Re-send today's daybook from the engineer phone (it now uploads photos to Drive separately) or import a slimmer JSON.",
+          "#c0392b"
+        );
+        return;
+      }
       let parts = [];
       parts.push("Imported " + certs + " cert" + (certs === 1 ? "" : "s"));
       if (dups) parts.push(dups + " skipped (already imported)");
@@ -821,11 +834,31 @@
       naAdded++;
     });
 
-    try { localStorage.setItem("gsc_records", JSON.stringify(recs)); } catch (e) {}
-    try { localStorage.setItem("gsc_folders", JSON.stringify(folders)); } catch (e) {}
-    try { localStorage.setItem(naKey, JSON.stringify(naLog)); } catch (e) {}
+    // BUG-FIX (Records folder empty after import — May 2026):
+    // Previously this was `try { setItem... } catch (e) {}`. When the records
+    // payload exceeded the browser's localStorage quota (≈ 5–10 MB) the write
+    // silently failed but the import still showed "Imported N certs" and the
+    // page reloaded — so the user saw an empty Records folder with no
+    // explanation. Now: catch the quota error explicitly, surface it to the
+    // log, and signal failure to the caller so the toast says something
+    // accurate ("Records too big to save — see console / open in chunks").
+    let saveOk = true;
+    let saveErr = "";
+    try {
+      localStorage.setItem("gsc_records", JSON.stringify(recs));
+    } catch (e) {
+      saveOk = false;
+      saveErr = (e && (e.name + ": " + e.message)) || "setItem failed";
+      console.error("[gsc] gsc_records setItem failed:", e);
+    }
+    if (saveOk) {
+      try { localStorage.setItem("gsc_folders", JSON.stringify(folders)); }
+      catch (e) { console.error("[gsc] gsc_folders setItem failed:", e); saveOk = false; }
+      try { localStorage.setItem(naKey, JSON.stringify(naLog)); }
+      catch (e) { console.warn("[gsc] no-access log setItem failed:", e); /* non-fatal */ }
+    }
 
-    return { imported, duplicates, noAccess: naAdded };
+    return { imported, duplicates, noAccess: naAdded, saveOk: saveOk, saveErr: saveErr };
   }
 
   // ---------- CLOUD DAYBOOK AUTO-IMPORT ----------
@@ -856,6 +889,8 @@
       if (!items.length) return;
 
       let totalCerts = 0, totalDups = 0, totalNa = 0, photoTotal = 0;
+      let saveFailed = false;
+      let saveFailDetail = "";
       for (const it of items) {
         const d = it && it.daybook;
         if (!d) continue;
@@ -867,6 +902,21 @@
         totalCerts += r.imported || 0;
         totalDups  += r.duplicates || 0;
         totalNa    += r.noAccess || 0;
+        if (r.saveOk === false) {
+          saveFailed = true;
+          saveFailDetail = r.saveErr || "storage full";
+        }
+      }
+
+      // BUG-FIX: don't clear the cloud queue if persisting locally failed —
+      // otherwise the records are lost forever. Surface the error and bail.
+      if (saveFailed) {
+        showLog(
+          "Imported certs but could not save them locally (" + saveFailDetail +
+          "). Cloud queue NOT cleared so the data is preserved — contact support.",
+          "#c0392b"
+        );
+        return;
       }
 
       // Clear the cloud queue ONLY after a successful import.
@@ -964,23 +1014,52 @@
     return match;
   }
 
+  // Resolve a photo entry to raw bytes + mime type. Supports both legacy
+  // entries (ph.dataUrl) and new Drive-backed entries (ph.driveFileId). For
+  // Drive entries we lazy-fetch through /api/get-photo, which proxies via
+  // the service account so the admin browser doesn't need Google auth.
+  async function loadPhotoBytes(ph) {
+    // Drive-backed entry: lazy-fetch.
+    if (ph && ph.driveFileId) {
+      const adminKey = (function () {
+        try { return sessionStorage.getItem("gsAdminKey") || ""; } catch (e) { return ""; }
+      })();
+      const resp = await fetch(
+        "/api/get-photo?id=" + encodeURIComponent(ph.driveFileId),
+        { headers: { "x-admin-key": adminKey } }
+      );
+      if (!resp.ok) {
+        throw new Error("drive fetch failed: HTTP " + resp.status);
+      }
+      const buf = await resp.arrayBuffer();
+      const mime = (ph.mimeType || resp.headers.get("content-type") || "image/jpeg").toLowerCase();
+      return { bytes: new Uint8Array(buf), isPng: mime.indexOf("png") !== -1 };
+    }
+    // Legacy data-URL entry.
+    if (ph && ph.dataUrl && ph.dataUrl.startsWith("data:image/")) {
+      const isPng = ph.dataUrl.indexOf("image/png") !== -1;
+      const b64 = ph.dataUrl.split(",")[1];
+      const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+      return { bytes, isPng };
+    }
+    throw new Error("photo has neither driveFileId nor dataUrl");
+  }
+
   async function buildPhotoPdfPages(record, basePdfBytes) {
     const PDFLib = await loadPdfLib();
     const doc = await PDFLib.PDFDocument.load(basePdfBytes);
     const photos = (record && record.photos) || [];
     let skippedPhotos = 0;
     for (const ph of photos) {
-      if (!ph || !ph.dataUrl || !ph.dataUrl.startsWith("data:image/")) {
+      if (!ph || (!ph.dataUrl && !ph.driveFileId)) {
         skippedPhotos++; continue;
       }
-      const isPng = ph.dataUrl.indexOf("image/png") !== -1;
-      const b64 = ph.dataUrl.split(",")[1];
-      // Decode base64 — a single bad photo must not crash the whole PDF.
-      let bytes;
+      let bytes, isPng;
       try {
-        bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-      } catch (decodeErr) {
-        console.warn("Skipping photo " + (ph.label || "?") + ": invalid base64");
+        const loaded = await loadPhotoBytes(ph);
+        bytes = loaded.bytes; isPng = loaded.isPng;
+      } catch (loadErr) {
+        console.warn("Skipping photo " + (ph.label || "?") + ": " + (loadErr && loadErr.message));
         skippedPhotos++; continue;
       }
       let img;

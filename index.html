@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en" class="dark">
-<!-- BUILD: oauth-drive-v2-pill-always 2026-05-09 -->
+<!-- BUILD: oauth-drive-v3-big-button 2026-05-09 -->
   <head>
     <meta charset="UTF-8" />
     <title>Citizen Gas</title>
@@ -157,19 +157,64 @@
     <!-- Admin shortcut to dashboard (only visible after engineer sign-in) -->
     <button id="cg-admin-btn" type="button" aria-label="Open admin dashboard">Admin</button>
 
-    <!-- Google Sign-In status pill — fixed top-right after engineer sign-in.
-         Tap to sign in with Google (or re-auth if the token expired). -->
-    <button id="cg-google-btn" type="button" aria-label="Google sign-in" style="
-      position: fixed; right: 16px; top: 16px; z-index: 9998;
-      background: #fff; color: #18252D; border: 1px solid #d0d7de;
-      border-radius: 999px; padding: 8px 14px;
-      font: 600 12px/1 ui-sans-serif, system-ui, 'Segoe UI', Roboto, sans-serif;
-      cursor: pointer; display: none; align-items: center; gap: 8px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
-    ">
-      <span style="display:inline-block;width:14px;height:14px;background:url('data:image/svg+xml;utf8,&lt;svg xmlns=&quot;http://www.w3.org/2000/svg&quot; viewBox=&quot;0 0 48 48&quot;&gt;&lt;path fill=&quot;%23FFC107&quot; d=&quot;M43.6 20.5H42V20H24v8h11.3c-1.6 4.7-6 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.3-.4-3.5z&quot;/&gt;&lt;path fill=&quot;%23FF3D00&quot; d=&quot;M6.3 14.7l6.6 4.8C14.7 16 19 13 24 13c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z&quot;/&gt;&lt;path fill=&quot;%234CAF50&quot; d=&quot;M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2c-2 1.4-4.5 2.4-7.2 2.4-5.3 0-9.7-3.3-11.3-8l-6.5 5C9.6 39.6 16.2 44 24 44z&quot;/&gt;&lt;path fill=&quot;%231976D2&quot; d=&quot;M43.6 20.5H42V20H24v8h11.3c-.7 2.1-2 3.9-3.7 5.2l6.2 5.2C40.9 35 44 29.9 44 24c0-1.3-.1-2.3-.4-3.5z&quot;/&gt;&lt;/svg&gt;') no-repeat center/contain;"></span>
-      <span id="cg-google-btn-label">Sign in with Google</span>
+    <!-- Big centered Drive sign-in button on the engineer sign-in screen.
+         Becomes a small top-right pill once signed in. -->
+    <button id="cg-google-btn" type="button" aria-label="Sign in with Drive" style="display:none;">
+      <span class="cg-google-icon"></span>
+      <span id="cg-google-btn-label">Sign in with Drive</span>
     </button>
+    <style>
+      /* Big centered button (default — used until the engineer signs in) */
+      #cg-google-btn {
+        position: fixed;
+        left: 50%;
+        top: 200px;
+        transform: translateX(-50%);
+        z-index: 9998;
+        background: #fff;
+        color: #18252D;
+        border: 1px solid #d0d7de;
+        border-radius: 14px;
+        padding: 18px 28px;
+        font: 700 18px/1.2 ui-sans-serif, system-ui, 'Segoe UI', Roboto, sans-serif;
+        cursor: pointer;
+        align-items: center;
+        gap: 14px;
+        box-shadow: 0 6px 24px rgba(0,0,0,0.45);
+        min-width: 260px;
+        justify-content: center;
+      }
+      #cg-google-btn .cg-google-icon {
+        display: inline-block;
+        width: 24px; height: 24px;
+        background: url('data:image/svg+xml;utf8,&lt;svg xmlns=&quot;http://www.w3.org/2000/svg&quot; viewBox=&quot;0 0 48 48&quot;&gt;&lt;path fill=&quot;%23FFC107&quot; d=&quot;M43.6 20.5H42V20H24v8h11.3c-1.6 4.7-6 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.3-.4-3.5z&quot;/&gt;&lt;path fill=&quot;%23FF3D00&quot; d=&quot;M6.3 14.7l6.6 4.8C14.7 16 19 13 24 13c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z&quot;/&gt;&lt;path fill=&quot;%234CAF50&quot; d=&quot;M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2c-2 1.4-4.5 2.4-7.2 2.4-5.3 0-9.7-3.3-11.3-8l-6.5 5C9.6 39.6 16.2 44 24 44z&quot;/&gt;&lt;path fill=&quot;%231976D2&quot; d=&quot;M43.6 20.5H42V20H24v8h11.3c-.7 2.1-2 3.9-3.7 5.2l6.2 5.2C40.9 35 44 29.9 44 24c0-1.3-.1-2.3-.4-3.5z&quot;/&gt;&lt;/svg&gt;') no-repeat center/contain;
+      }
+      /* Compact pill once signed in (top-right corner) */
+      #cg-google-btn.cg-pill {
+        left: auto;
+        right: 16px;
+        top: 16px;
+        transform: none;
+        padding: 8px 14px;
+        font-size: 12px;
+        min-width: 0;
+        border-radius: 999px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+      }
+      #cg-google-btn.cg-pill .cg-google-icon { width: 14px; height: 14px; }
+
+      /* Faded engineer fields until Drive sign-in succeeds */
+      body.cg-drive-locked #root input,
+      body.cg-drive-locked #root textarea,
+      body.cg-drive-locked #root select,
+      body.cg-drive-locked #root button[type="submit"],
+      body.cg-drive-locked #root [data-testid="button-continue"] {
+        opacity: 0.35 !important;
+        pointer-events: none !important;
+        filter: grayscale(0.4);
+      }
+      /* Slot picker stays interactive (it's outside #root) */
+    </style>
 
     <!-- Sent confirmation overlay (engineer's end-of-flow) -->
     <div id="cg-sent-overlay" role="dialog" aria-live="polite">
@@ -1535,10 +1580,14 @@ window.cgGoogleAuth = (function () {
   function refreshVisibility() {
     const btn = document.getElementById("cg-google-btn");
     if (!btn) return;
-    // Always show the Google sign-in pill — engineers must be able to
-    // sign in to Drive at any point (including on the engineer sign-in
-    // screen) so photos can be saved when a job starts.
     btn.style.display = "inline-flex";
+    if (isSignedIn()) {
+      btn.classList.add("cg-pill");
+      document.body.classList.remove("cg-drive-locked");
+    } else {
+      btn.classList.remove("cg-pill");
+      document.body.classList.add("cg-drive-locked");
+    }
     renderButton();
   }
 

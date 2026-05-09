@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en" class="dark">
-<!-- BUILD: oauth-drive-v3-big-button 2026-05-09 -->
+<!-- BUILD: photo-dedup-v1 2026-05-09 -->
   <head>
     <meta charset="UTF-8" />
     <title>Citizen Gas</title>
@@ -259,8 +259,19 @@
             try {
               var r = fr.result;
               if (typeof r === "string" && r.indexOf("data:image/") === 0) {
-                window.__cgPhotoBucket.push({ dataUrl: r, capturedAt: Date.now() });
-                // Cap bucket size — engineer rarely takes more than ~30 photos a day.
+                // Route through pushIfNew (defined below) for dedup.
+                // It may not exist yet at first call — fall back to a
+                // simple inline dedup against existing bucket entries.
+                if (typeof window.cgPushPhotoIfNew === "function") {
+                  window.cgPushPhotoIfNew(r);
+                } else {
+                  var b = window.__cgPhotoBucket;
+                  var dup = false;
+                  for (var k = 0; k < b.length; k++) {
+                    if (b[k] && b[k].dataUrl === r) { dup = true; break; }
+                  }
+                  if (!dup) b.push({ dataUrl: r, capturedAt: Date.now() });
+                }
                 if (window.__cgPhotoBucket.length > 200) {
                   window.__cgPhotoBucket.splice(0, window.__cgPhotoBucket.length - 200);
                 }
@@ -329,12 +340,16 @@
                 try {
                   var r = reader.result;
                   if (typeof r !== "string" || r.indexOf("data:image/") !== 0) return;
-                  // Dedup against existing entries.
-                  var b = window.__cgPhotoBucket || [];
-                  for (var j = 0; j < b.length; j++) {
-                    if (b[j] && b[j].dataUrl === r) return;
+                  // Route through cgPushPhotoIfNew for dedup + compression.
+                  if (typeof window.cgPushPhotoIfNew === "function") {
+                    window.cgPushPhotoIfNew(r);
+                  } else {
+                    var b = window.__cgPhotoBucket || [];
+                    for (var j = 0; j < b.length; j++) {
+                      if (b[j] && b[j].dataUrl === r) return;
+                    }
+                    window.__cgPhotoBucket.push({ dataUrl: r, capturedAt: Date.now() });
                   }
-                  window.__cgPhotoBucket.push({ dataUrl: r, capturedAt: Date.now() });
                 } catch (e) {}
               };
               try { reader.readAsDataURL(file); } catch (e) {}
@@ -406,8 +421,14 @@
         if (typeof dataUrl !== "string") return;
         if (dataUrl.indexOf("data:image/") !== 0) return;
         var b = window.__cgPhotoBucket || [];
+        // Dedup by exact dataUrl OR by length+first-200-char fingerprint
+        // (catches near-duplicates from re-renders that re-encode).
         for (var i = 0; i < b.length; i++) {
-          if (b[i] && b[i].dataUrl === dataUrl) return;
+          if (!b[i]) continue;
+          if (b[i].dataUrl === dataUrl) return;
+          if (b[i].dataUrl &&
+              b[i].dataUrl.length === dataUrl.length &&
+              b[i].dataUrl.slice(0, 200) === dataUrl.slice(0, 200)) return;
         }
         // If the photo is small enough already (<100KB) skip compression to
         // save CPU. Otherwise downscale before storing.
@@ -424,6 +445,7 @@
           window.__cgPhotoBucket.push({ dataUrl: compressed, capturedAt: Date.now() });
         });
       }
+      window.cgPushPhotoIfNew = pushIfNew;
       function blobUrlToDataUrl(blobUrl) {
         try {
           fetch(blobUrl).then(function (r) { return r.blob(); }).then(function (blob) {
@@ -2056,7 +2078,23 @@ window.cgGoogleAuth = (function () {
       finalChecks,
       signatureData: {},
       engineerData,
-      photos: attachedPhotos.map(p => ({ label: p.label, dataUrl: p.dataUrl })),
+      // Final dedup just before storing on the cert: collapse any
+      // remaining duplicate dataUrls (multiple capture paths can pick up
+      // the same photo at slightly different moments).
+      photos: (function () {
+        var seen = Object.create(null);
+        var out = [];
+        for (var i = 0; i < attachedPhotos.length; i++) {
+          var p = attachedPhotos[i];
+          if (!p || !p.dataUrl) continue;
+          // Fingerprint = length + first 200 chars (cheap, near-zero collisions for image data URLs)
+          var fp = p.dataUrl.length + "|" + p.dataUrl.slice(0, 200);
+          if (seen[fp]) continue;
+          seen[fp] = true;
+          out.push({ label: p.label, dataUrl: p.dataUrl });
+        }
+        return out;
+      })(),
       // FEATURE (Materials in daily email): carry materials through to the cert
       // so the email body / admin import / JSON download can list them.
       materials: Array.isArray(prop.materials) ? prop.materials.slice() : [],

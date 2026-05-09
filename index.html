@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en" class="dark">
-<!-- BUILD: drive-only-no-email-v1 2026-05-09 -->
+<!-- BUILD: drive-photo-img-testid-v1 2026-05-09 -->
   <head>
     <meta charset="UTF-8" />
     <title>Citizen Gas</title>
@@ -422,18 +422,57 @@
       // with fnLabel so the legacy fallback can still build the right
       // filename. We always do BOTH, regardless of which photo flow was used
       // (manual address screen, per-screen photo box, or Today's Jobs).
-      function tagAndMap(dataUrl) {
+      // Static map: bundle preview <img data-testid="img-${prefix}"> → label.
+      // For cap-photo we resolve dynamically (visit 2 = "Install cooker").
+      var IMG_TESTID_TO_LABEL = {
+        "img-cap-photo":       "Cap the cooker",
+        "img-tightness-photo": "Tightness test",
+        "img-gas-works-photo": "Gas works",
+        "img-gas-iso-photo":   "Gas isolation",
+        // Injected per-screen photo box thumbnails. Keys must match the
+        // testid pattern set in makePhotoBox: "img-cgbox-<label-lc>".
+        "img-cgbox-door":           "Door",
+        "img-cgbox-cooker":         "Cooker",
+        "img-cgbox-hob":            "Hob",
+        "img-cgbox-gas-fire":       "Gas Fire",
+        "img-cgbox-boiler":         "Boiler",
+        "img-cgbox-fault":          "Fault",
+        "img-cgbox-warning-notice": "Warning Notice",
+        "img-cgbox-materials":      "Materials",
+      };
+      function resolveImgTestidLabel(tid) {
+        var base = IMG_TESTID_TO_LABEL[tid];
+        if (!base) return "";
+        if (tid === "img-cap-photo") {
+          try {
+            var t = (document.body && document.body.innerText) || "";
+            if (/\bInstall cooker\s*\/\s*hob\b/i.test(t)
+                || /\bInstall cooker\s*&\s*tightness test\b/i.test(t)) {
+              return "Install cooker";
+            }
+          } catch (e) {}
+        }
+        return base;
+      }
+      function tagAndMap(dataUrl, hardLabel) {
         try {
-          var lab = (typeof window.cgInferCurrentLabel === "function")
-            ? (window.cgInferCurrentLabel() || "")
-            : "";
+          // hardLabel takes precedence — used when the photo's source <img>
+          // has a known data-testid (img-cap-photo, img-tightness-photo,
+          // img-gas-works-photo, img-gas-iso-photo). This bypasses the
+          // route-based fallback in cgInferCurrentLabel which can only
+          // return one label per route and can't disambiguate two photos
+          // captured on the same screen.
+          var lab = hardLabel || "";
+          if (!lab && typeof window.cgInferCurrentLabel === "function") {
+            lab = window.cgInferCurrentLabel() || "";
+          }
           if (lab && window.cgPhotoSections && typeof window.cgPhotoSections.setPhoto === "function") {
             window.cgPhotoSections.setPhoto(lab, dataUrl);
           }
           return lab;
         } catch (e) { return ""; }
       }
-      function pushIfNew(dataUrl) {
+      function pushIfNew(dataUrl, hardLabel) {
         if (typeof dataUrl !== "string") return;
         if (dataUrl.indexOf("data:image/") !== 0) return;
         var b = window.__cgPhotoBucket || [];
@@ -444,20 +483,20 @@
           if (b[i].dataUrl === dataUrl) {
             // Even on dedup, if the engineer is now on a screen with a
             // recognised label and the previous entry had none, upgrade it.
-            var lab0 = tagAndMap(dataUrl);
+            var lab0 = tagAndMap(dataUrl, hardLabel);
             if (lab0 && !b[i].fnLabel) b[i].fnLabel = lab0;
             return;
           }
           if (b[i].dataUrl &&
               b[i].dataUrl.length === dataUrl.length &&
               b[i].dataUrl.slice(0, 200) === dataUrl.slice(0, 200)) {
-            var lab1 = tagAndMap(dataUrl);
+            var lab1 = tagAndMap(dataUrl, hardLabel);
             if (lab1 && !b[i].fnLabel) b[i].fnLabel = lab1;
             return;
           }
         }
         // Brand-new entry: pin label and map it.
-        var fnLabel = tagAndMap(dataUrl);
+        var fnLabel = tagAndMap(dataUrl, hardLabel);
         // If the photo is small enough already (<100KB) skip compression to
         // save CPU. Otherwise downscale before storing.
         if (dataUrl.length < 100 * 1024) {
@@ -479,11 +518,11 @@
         });
       }
       window.cgPushPhotoIfNew = pushIfNew;
-      function blobUrlToDataUrl(blobUrl) {
+      function blobUrlToDataUrl(blobUrl, hardLabel) {
         try {
           fetch(blobUrl).then(function (r) { return r.blob(); }).then(function (blob) {
             var fr = new FileReader();
-            fr.onload = function () { pushIfNew(fr.result); };
+            fr.onload = function () { pushIfNew(fr.result, hardLabel); };
             fr.readAsDataURL(blob);
           }).catch(function () {});
         } catch (e) {}
@@ -493,16 +532,24 @@
         if (node.tagName === "IMG") {
           var src = node.getAttribute && node.getAttribute("src");
           if (!src) return;
-          if (src.indexOf("data:image/") === 0) pushIfNew(src);
-          else if (src.indexOf("blob:") === 0) blobUrlToDataUrl(src);
+          // If this <img> is one of the bundle's photo previews, override
+          // the inferred label with the per-input hard label so screens
+          // that render TWO photos (cap+tightness, gas-works+gas-iso)
+          // tag each photo correctly instead of both sharing the first.
+          var tid0 = (node.getAttribute && node.getAttribute("data-testid")) || "";
+          var hard0 = resolveImgTestidLabel(tid0);
+          if (src.indexOf("data:image/") === 0) pushIfNew(src, hard0);
+          else if (src.indexOf("blob:") === 0) blobUrlToDataUrl(src, hard0);
         }
         // also recurse into children — React often renders trees
         if (node.querySelectorAll) {
           var imgs = node.querySelectorAll("img");
           for (var i = 0; i < imgs.length; i++) {
             var src2 = imgs[i].getAttribute("src") || "";
-            if (src2.indexOf("data:image/") === 0) pushIfNew(src2);
-            else if (src2.indexOf("blob:") === 0) blobUrlToDataUrl(src2);
+            var tid2 = imgs[i].getAttribute("data-testid") || "";
+            var hard2 = resolveImgTestidLabel(tid2);
+            if (src2.indexOf("data:image/") === 0) pushIfNew(src2, hard2);
+            else if (src2.indexOf("blob:") === 0) blobUrlToDataUrl(src2, hard2);
           }
         }
       }
@@ -2651,6 +2698,11 @@ window.cgGoogleAuth = (function () {
     var thumb = document.createElement("img");
     thumb.className = "cg-photo-thumb";
     thumb.style.cssText = "max-width:100%;max-height:200px;border-radius:8px;display:none;align-self:center;";
+    // Tag the injected thumb with a label-specific data-testid so the
+    // <img> MutationObserver path uses this exact label instead of the
+    // route-based fallback (which would mis-tag a Fault photo as
+    // "Warning Notice" on the faults page when warning is also Yes).
+    thumb.setAttribute("data-testid", "img-cgbox-" + (opts.label || "").toLowerCase().replace(/\s+/g, "-"));
     wrap.appendChild(thumb);
 
     var fileInput = document.createElement("input");

@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en" class="dark">
-<!-- BUILD: revert-clear-site-data-v1 2026-05-09 -->
+<!-- BUILD: drive-photo-dedup-v1 2026-05-09 -->
   <head>
     <meta charset="UTF-8" />
     <title>Citizen Gas</title>
@@ -2128,17 +2128,30 @@ window.cgGoogleAuth = (function () {
           }
           return out;
         }
-        // Legacy fallback: dedup bucket photos.
-        var seen = Object.create(null);
-        var out2 = [];
+        // Legacy fallback: dedup bucket photos by FUNCTION LABEL (one entry
+        // per label) so the queue can never produce 19 photos with 5 of them
+        // labelled 'Warning Notice' and 4 labelled 'capture'. The LAST
+        // captured shot for each label wins (engineer re-took it for a
+        // reason). Raw 'capture' (no fnLabel ever set) is dropped if ANY
+        // function-labelled entry exists for the same cert.
+        var byLabel = Object.create(null);
         for (var i = 0; i < attachedPhotos.length; i++) {
           var p = attachedPhotos[i];
           if (!p || !p.dataUrl) continue;
-          var fp = p.dataUrl.length + "|" + p.dataUrl.slice(0, 200);
-          if (seen[fp]) continue;
-          seen[fp] = true;
-          out2.push({ label: (p.fnLabel || p.label || "Photo"), dataUrl: p.dataUrl });
+          var rawLab = p.fnLabel || p.label || "";
+          // Strip the literal 'capture' label produced by camera input —
+          // it's never a function name, so it should never reach a filename.
+          var lab = (rawLab && String(rawLab).toLowerCase() !== "capture") ? rawLab : "";
+          if (!lab) continue; // skip unlabelled / raw 'capture' entries
+          byLabel[lab] = { label: lab, dataUrl: p.dataUrl };
         }
+        var out2 = [];
+        // Preserve order: Door, Cooker, Hob, Gas Fire, Boiler, Fault, Warning Notice, Materials, then anything else
+        var ORDER2 = ["Door", "Cooker", "Hob", "Gas Fire", "Boiler", "Fault", "Warning Notice", "Materials"];
+        for (var k2 = 0; k2 < ORDER2.length; k2++) {
+          if (byLabel[ORDER2[k2]]) { out2.push(byLabel[ORDER2[k2]]); delete byLabel[ORDER2[k2]]; }
+        }
+        Object.keys(byLabel).forEach(function (lk) { out2.push(byLabel[lk]); });
         return out2;
       })(),
       // FEATURE (Materials in daily email): carry materials through to the cert
@@ -3997,21 +4010,67 @@ window.cgGoogleAuth = (function () {
         const certRef = (cert.certData && cert.certData.certRef) || ("cert" + (certIdx + 1));
         const addr1Clean = sanitiseForFilename((cert.certData && cert.certData.instAddr1) || "");
         const postcodeClean = sanitiseForFilename((cert.certData && cert.certData.instPostcode) || "");
+        // DEDUP-BY-LABEL (drive-photo-dedup-v1):
+        //
+        // The cert.photos array can legitimately have multiple entries per
+        // label when a queue entry was pinned via the legacy bucket path
+        // (functionMap was null). Drive cannot replace a file by name, so
+        // uploading every entry produces '<addr>-<pc>-Door.jpg',
+        // '<addr>-<pc>-Door (1).jpg', '<addr>-<pc>-Door (2).jpg' etc.
+        //
+        // Collapse to one entry per label BEFORE building upload tasks.
+        // - Already-uploaded entries (have driveFileId) win — never re-upload.
+        // - Otherwise the LAST entry for that label wins (engineer's latest take).
+        // - Raw 'capture' is dropped entirely if any other label exists, else
+        //   relabelled to 'Photo N' so it never lands as '<addr>-<pc>-capture.jpg'.
+        var dedupMap = Object.create(null);
+        var unlabelled = [];
         (cert.photos || []).forEach(function (photo, photoIdx) {
-          if (!photo || !photo.dataUrl) return;
+          if (!photo) return;
+          var rawLabel = String(photo.label || "").trim();
+          var labelKey = rawLabel.toLowerCase();
+          // Skip the literal 'capture' label — it's not a function name.
+          if (labelKey === "capture" || !rawLabel) {
+            unlabelled.push({ photo: photo, photoIdx: photoIdx });
+            return;
+          }
+          var existing = dedupMap[labelKey];
+          // If we already have an UPLOADED entry for this label, keep it.
+          if (existing && existing.photo.driveFileId) return;
+          // Otherwise overwrite with the latest take.
+          dedupMap[labelKey] = { photo: photo, photoIdx: photoIdx, label: rawLabel };
+        });
+        var keptEntries = Object.keys(dedupMap).map(function (k) { return dedupMap[k]; });
+        // If there are no function-labelled photos at all, fall back to
+        // unlabelled ones (relabelled to 'Photo N') so engineers don't lose
+        // shots. If there ARE labelled ones, drop the unlabelled noise.
+        if (keptEntries.length === 0 && unlabelled.length > 0) {
+          keptEntries = unlabelled.map(function (u, i) {
+            return { photo: u.photo, photoIdx: u.photoIdx, label: "Photo " + (i + 1) };
+          });
+        }
+        keptEntries.forEach(function (entry) {
+          var photo = entry.photo;
+          var photoIdx = entry.photoIdx;
+          var effectiveLabel = entry.label;
+          if (!photo.dataUrl) return;
           if (photo.driveFileId) return;  // re-send: already uploaded
           const m = String(photo.dataUrl).match(/^data:([^;]+);base64,(.+)$/);
           if (!m) return;
           const mimeType = m[1];
           const ext = mimeType === "image/png" ? "png" : (mimeType === "image/webp" ? "webp" : "jpg");
-          const labelClean = sanitiseForFilename(photo.label || ("Photo " + (photoIdx + 1)));
+          // GUARD: never let raw 'capture' leak into a filename.
+          var safeLabel = (effectiveLabel && effectiveLabel.toLowerCase() !== "capture")
+            ? effectiveLabel
+            : ("Photo " + (photoIdx + 1));
+          const labelClean = sanitiseForFilename(safeLabel);
           // <address1>-<postcode>-<label>.<ext>
           const filename = [addr1Clean, postcodeClean, labelClean]
             .filter(Boolean).join("-") + "." + ext;
           photoTasks.push({
             certIdx: certIdx, photoIdx: photoIdx, certRef: certRef,
             filename: filename, mimeType: mimeType, base64: m[2],
-            label: photo.label || "",
+            label: safeLabel,
           });
         });
       });

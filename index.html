@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en" class="dark">
-<!-- BUILD: drive-resumable-upload-v2 2026-05-09 -->
+<!-- BUILD: oauth-drive-v1 2026-05-09 -->
   <head>
     <meta charset="UTF-8" />
     <title>Citizen Gas</title>
@@ -15,6 +15,9 @@
     />
     <script type="module" crossorigin src="./assets/index-DuY2PSMh.js"></script>
     <link rel="stylesheet" crossorigin href="./assets/index-yAhcxWvt.css">
+    <!-- Google Identity Services (loaded async; the OAuth controller below
+         polls window.google before initialising). -->
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
     <style>
       #cg-sent-overlay {
         position: fixed; inset: 0; z-index: 99999;
@@ -153,6 +156,20 @@
 
     <!-- Admin shortcut to dashboard (only visible after engineer sign-in) -->
     <button id="cg-admin-btn" type="button" aria-label="Open admin dashboard">Admin</button>
+
+    <!-- Google Sign-In status pill — fixed top-right after engineer sign-in.
+         Tap to sign in with Google (or re-auth if the token expired). -->
+    <button id="cg-google-btn" type="button" aria-label="Google sign-in" style="
+      position: fixed; right: 16px; top: 16px; z-index: 9998;
+      background: #fff; color: #18252D; border: 1px solid #d0d7de;
+      border-radius: 999px; padding: 8px 14px;
+      font: 600 12px/1 ui-sans-serif, system-ui, 'Segoe UI', Roboto, sans-serif;
+      cursor: pointer; display: none; align-items: center; gap: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    ">
+      <span style="display:inline-block;width:14px;height:14px;background:url('data:image/svg+xml;utf8,&lt;svg xmlns=&quot;http://www.w3.org/2000/svg&quot; viewBox=&quot;0 0 48 48&quot;&gt;&lt;path fill=&quot;%23FFC107&quot; d=&quot;M43.6 20.5H42V20H24v8h11.3c-1.6 4.7-6 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.3-.4-3.5z&quot;/&gt;&lt;path fill=&quot;%23FF3D00&quot; d=&quot;M6.3 14.7l6.6 4.8C14.7 16 19 13 24 13c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z&quot;/&gt;&lt;path fill=&quot;%234CAF50&quot; d=&quot;M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2c-2 1.4-4.5 2.4-7.2 2.4-5.3 0-9.7-3.3-11.3-8l-6.5 5C9.6 39.6 16.2 44 24 44z&quot;/&gt;&lt;path fill=&quot;%231976D2&quot; d=&quot;M43.6 20.5H42V20H24v8h11.3c-.7 2.1-2 3.9-3.7 5.2l6.2 5.2C40.9 35 44 29.9 44 24c0-1.3-.1-2.3-.4-3.5z&quot;/&gt;&lt;/svg&gt;') no-repeat center/contain;"></span>
+      <span id="cg-google-btn-label">Sign in with Google</span>
+    </button>
 
     <!-- Sent confirmation overlay (engineer's end-of-flow) -->
     <div id="cg-sent-overlay" role="dialog" aria-live="polite">
@@ -1359,6 +1376,180 @@
 // structured cert object. Persist into localStorage["citizenGas.daybook"].
 // Add a "Finish day & email" button so the engineer can email the JSON
 // to the admin inbox at end of shift.
+
+// ─── Google OAuth controller (engineer side) ──────────────────────────────
+// Replaces the broken service-account upload flow.  Each engineer signs in
+// with their own Google account; photos and the cert JSON are uploaded
+// directly to THEIR Drive (in a date-named folder), and read-permission is
+// granted to the admin email so the admin app can fetch them with its own
+// Google session.  The service account is no longer in the upload path.
+const GOOGLE_CLIENT_ID = "576198550128-bk285smjtv35fnnnmql205vl09nre7nr.apps.googleusercontent.com";
+const ADMIN_EMAIL = "broxburnboilers@gmail.com";
+const GOOGLE_TOKEN_KEY = "cg_google_token";
+const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
+
+window.cgGoogleAuth = (function () {
+  let tokenClient = null;
+  let pendingResolve = null;
+  let pendingReject = null;
+
+  function readStored() {
+    try { return JSON.parse(localStorage.getItem(GOOGLE_TOKEN_KEY) || "null"); }
+    catch (e) { return null; }
+  }
+  function writeStored(t) {
+    try { localStorage.setItem(GOOGLE_TOKEN_KEY, JSON.stringify(t)); } catch (e) {}
+  }
+  function clearStored() {
+    try { localStorage.removeItem(GOOGLE_TOKEN_KEY); } catch (e) {}
+  }
+  function isFresh(t) {
+    return t && t.access_token && t.expires_at && (t.expires_at - Date.now() > 60 * 1000);
+  }
+
+  // Decode the email from the access token by calling the userinfo endpoint
+  // on first acquisition.  Cached on the stored token afterwards.
+  async function fetchEmail(accessToken) {
+    try {
+      const r = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+        headers: { Authorization: "Bearer " + accessToken },
+      });
+      if (!r.ok) return null;
+      const j = await r.json();
+      return (j && j.email) || null;
+    } catch (e) { return null; }
+  }
+
+  function ensureClient() {
+    if (tokenClient) return true;
+    if (!window.google || !window.google.accounts || !window.google.accounts.oauth2) return false;
+    tokenClient = window.google.accounts.oauth2.initTokenClient({
+      client_id: GOOGLE_CLIENT_ID,
+      scope: DRIVE_SCOPE,
+      prompt: "",
+      callback: function (resp) {
+        if (resp && resp.access_token) {
+          const expiresIn = (resp.expires_in || 3600) * 1000;
+          const t = {
+            access_token: resp.access_token,
+            expires_at: Date.now() + expiresIn - 30 * 1000,
+            email: null,
+            scope: resp.scope || DRIVE_SCOPE,
+          };
+          fetchEmail(resp.access_token).then(function (em) {
+            t.email = em || null;
+            writeStored(t);
+            renderButton();
+            if (pendingResolve) { pendingResolve(t); pendingResolve = null; pendingReject = null; }
+          });
+        } else {
+          if (pendingReject) { pendingReject(new Error("oauth declined")); pendingResolve = null; pendingReject = null; }
+        }
+      },
+      error_callback: function (err) {
+        if (pendingReject) { pendingReject(new Error("oauth error: " + (err && err.type))); pendingResolve = null; pendingReject = null; }
+      },
+    });
+    return true;
+  }
+
+  function requestToken(opts) {
+    return new Promise(function (resolve, reject) {
+      // Wait up to 8s for GIS to load.
+      let waited = 0;
+      const tick = setInterval(function () {
+        if (ensureClient()) {
+          clearInterval(tick);
+          pendingResolve = resolve; pendingReject = reject;
+          try {
+            tokenClient.requestAccessToken({ prompt: opts && opts.silent ? "" : "consent" });
+          } catch (e) { reject(e); }
+        } else if ((waited += 200) >= 8000) {
+          clearInterval(tick);
+          reject(new Error("Google Identity Services failed to load"));
+        }
+      }, 200);
+    });
+  }
+
+  async function getValidToken(opts) {
+    const stored = readStored();
+    if (isFresh(stored)) return stored;
+    // Try silent re-auth first; fall back to interactive.
+    try {
+      return await requestToken({ silent: true });
+    } catch (e) {
+      if (opts && opts.interactive === false) throw e;
+      return await requestToken({ silent: false });
+    }
+  }
+
+  function signOut() {
+    const t = readStored();
+    if (t && t.access_token && window.google && window.google.accounts && window.google.accounts.oauth2) {
+      try { window.google.accounts.oauth2.revoke(t.access_token, function () {}); } catch (e) {}
+    }
+    clearStored();
+    renderButton();
+  }
+
+  function renderButton() {
+    const btn = document.getElementById("cg-google-btn");
+    const lbl = document.getElementById("cg-google-btn-label");
+    if (!btn || !lbl) return;
+    const t = readStored();
+    if (isFresh(t)) {
+      lbl.textContent = t.email ? ("Drive: " + t.email) : "Drive signed in";
+    } else {
+      lbl.textContent = "Sign in with Google";
+    }
+  }
+
+  function isSignedIn() { return isFresh(readStored()); }
+
+  // Wire up the visible Google sign-in button: tap to interactive sign-in,
+  // long-press (>800ms) to sign out so engineers can switch accounts.
+  function wireButton() {
+    const btn = document.getElementById("cg-google-btn");
+    if (!btn || btn.__wired) return;
+    btn.__wired = true;
+    let pressTimer = null;
+    btn.addEventListener("touchstart", function () {
+      pressTimer = setTimeout(function () { signOut(); pressTimer = null; }, 800);
+    });
+    btn.addEventListener("touchend", function () {
+      if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+    });
+    btn.addEventListener("click", function (e) {
+      if (pressTimer === null && btn.__justLongPressed) { btn.__justLongPressed = false; return; }
+      requestToken({ silent: false }).catch(function (err) {
+        console.warn("[cg] Google sign-in failed", err);
+        alert("Google sign-in failed: " + (err && err.message));
+      });
+    });
+  }
+
+  // Show the button once the engineer has signed into the app (mirrors how
+  // the Admin chip appears).  Cheapest signal: the slot picker is hidden
+  // because the React app is past the sign-in screen.
+  function refreshVisibility() {
+    const btn = document.getElementById("cg-google-btn");
+    if (!btn) return;
+    // Show whenever the React app is past its own sign-in screen.
+    const slot = document.getElementById("cg-slot-picker");
+    const onSigninScreen = slot && slot.style.display === "flex";
+    btn.style.display = onSigninScreen ? "none" : "inline-flex";
+    renderButton();
+  }
+
+  document.addEventListener("DOMContentLoaded", function () {
+    wireButton();
+    setInterval(refreshVisibility, 1000);
+  });
+
+  return { getValidToken, isSignedIn, signOut, renderButton, refreshVisibility };
+})();
+// ──────────────────────────────────────────────────────────────────────────
 
 (function () {
   const DAYBOOK_KEY = "citizenGas.daybook";
@@ -2887,36 +3078,152 @@
       }
     } catch (e) { console.warn("[cg] photo backfill failed", e); }
 
-    // ─── Drive photo upload pass ────────────────────────────────────────
-    // BUG-FIX (Daybook too big to send — May 2026):
-    // Previously every photo was kept as a base64 data URL inside the
-    // daybook JSON.  At ~250–400 KB per photo (after base64 overhead) and
-    // a typical 5 photos per cert × 12 certs = 60 photos, the daybook
-    // ballooned past 130 MB — far above Netlify Functions' 6 MB request
-    // body limit.  Both /api/send-daybook and /api/daybook silently failed
-    // with "Failed to fetch".  The admin then never saw the certs.
-    //
-    // New behaviour: upload each photo individually to a shared Google
-    // Drive folder (via /api/upload-photo, which uses a server-side service
-    // account).  Replace each photo's dataUrl with a small
-    // { driveFileId, label, filename, mimeType } reference.  The daybook
-    // JSON shrinks to ~50 KB and rides through the existing channels with
-    // no chunking required.  The admin lazy-loads photos via /api/get-photo
-    // when rendering certs.
-    //
-    // Failure handling: if Drive uploads fail we KEEP the original dataUrl
-    // so the local downloaded JSON (the engineer's safety net) and the
-    // /api/send-daybook email path still have photos.  Only /api/daybook
-    // (admin import) is degraded in that case, and the admin's existing
-    // localStorage import path is left as the secondary fallback.
+    // ─── OAuth Drive photo upload pass (per-engineer Drive) ─────────────
+    // The previous server-side service-account flow returned 403
+    // storageQuotaExceeded because SAs have no quota on personal Drive.
+    // We now sign the engineer in with their own Google account and
+    // upload photos + cert JSON directly into a date-named folder in
+    // THEIR Drive, sharing read access with the admin email so the admin
+    // app (signed in as the admin Google account) can still display them.
+    if (!window.cgGoogleAuth || !window.cgGoogleAuth.isSignedIn()) {
+      // Try a silent token first.  If the user has never signed in, we
+      // need an interactive consent and we surface a blocking modal.
+      try {
+        await window.cgGoogleAuth.getValidToken({ interactive: true });
+      } catch (e) {
+        showStatusModal({
+          title: "Google sign-in required",
+          message:
+            "To save photos to Drive, please tap the white \"Sign in with Google\" button at the top right of the screen, then try Send again.",
+          buttons: [{ label: "OK", primary: true }],
+        });
+        return;
+      }
+    }
+
     showStatusModal({
       title: "Uploading photos…",
-      message: "Sending photos to the office Drive. Don't close this page.",
+      message: "Saving to your Google Drive. Don't close this page.",
       buttons: [],
     });
+
+    async function driveAuthHeader() {
+      const t = await window.cgGoogleAuth.getValidToken({ interactive: true });
+      return "Bearer " + t.access_token;
+    }
+
+    function ukDateFolderName() {
+      // YYYY-MM-DD in UK time so dates flip over at UK midnight.
+      const fmt = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit",
+      });
+      return "Citizen Gas — " + fmt.format(new Date());
+    }
+
+    // Find or create the engineer's date folder, then grant the admin
+    // read access (best-effort; logged but not fatal if it fails).
+    async function ensureDateFolder() {
+      const name = ukDateFolderName();
+      const auth = await driveAuthHeader();
+      const q = "name = '" + name.replace(/'/g, "\\'") + "' and " +
+        "mimeType = 'application/vnd.google-apps.folder' and trashed = false";
+      const searchUrl = "https://www.googleapis.com/drive/v3/files?q=" +
+        encodeURIComponent(q) + "&fields=" + encodeURIComponent("files(id,name)");
+      const sresp = await fetch(searchUrl, { headers: { Authorization: auth } });
+      if (!sresp.ok) throw new Error("Drive search failed: " + sresp.status);
+      const sjson = await sresp.json();
+      if (sjson.files && sjson.files.length > 0) {
+        return { id: sjson.files[0].id, name: name, created: false };
+      }
+      const cresp = await fetch("https://www.googleapis.com/drive/v3/files?fields=id,name", {
+        method: "POST",
+        headers: { Authorization: auth, "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name, mimeType: "application/vnd.google-apps.folder" }),
+      });
+      if (!cresp.ok) throw new Error("Drive folder create failed: " + cresp.status);
+      const cjson = await cresp.json();
+      // Share the new folder with the admin so all files inside inherit
+      // read access.  drive.file scope only lets us touch files our app
+      // created — this folder qualifies.
+      try {
+        await fetch("https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(cjson.id) + "/permissions?sendNotificationEmail=false", {
+          method: "POST",
+          headers: { Authorization: auth, "Content-Type": "application/json" },
+          body: JSON.stringify({ role: "reader", type: "user", emailAddress: ADMIN_EMAIL }),
+        });
+      } catch (e) { console.warn("[cg] could not share folder with admin", e); }
+      return { id: cjson.id, name: name, created: true };
+    }
+
+    // Resumable upload for files > 4 MB; multipart for the rest.
+    async function driveUploadBytes(bytes, mimeType, filename, parentFolderId) {
+      const auth = await driveAuthHeader();
+      const metadata = { name: filename, parents: [parentFolderId] };
+      if (bytes.byteLength <= 4 * 1024 * 1024) {
+        // multipart upload
+        const boundary = "cg" + Math.random().toString(36).slice(2);
+        const meta = "--" + boundary + "\r\n" +
+          "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
+          JSON.stringify(metadata) + "\r\n" +
+          "--" + boundary + "\r\n" +
+          "Content-Type: " + mimeType + "\r\n\r\n";
+        const tail = "\r\n--" + boundary + "--";
+        const body = new Blob([meta, bytes, tail], { type: "multipart/related; boundary=" + boundary });
+        const resp = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink", {
+          method: "POST",
+          headers: { Authorization: auth, "Content-Type": "multipart/related; boundary=" + boundary },
+          body: body,
+        });
+        if (!resp.ok) {
+          const txt = await resp.text().catch(function () { return ""; });
+          throw new Error("Drive multipart upload failed " + resp.status + ": " + txt.slice(0, 200));
+        }
+        return await resp.json();
+      }
+      // resumable upload
+      const startResp = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,webViewLink", {
+        method: "POST",
+        headers: {
+          Authorization: auth,
+          "Content-Type": "application/json; charset=UTF-8",
+          "X-Upload-Content-Type": mimeType,
+          "X-Upload-Content-Length": String(bytes.byteLength),
+        },
+        body: JSON.stringify(metadata),
+      });
+      if (!startResp.ok) throw new Error("Drive resumable init failed: " + startResp.status);
+      const sessionUrl = startResp.headers.get("Location");
+      if (!sessionUrl) throw new Error("Drive resumable init: no Location header");
+      const putResp = await fetch(sessionUrl, {
+        method: "PUT",
+        headers: { "Content-Type": mimeType },
+        body: new Blob([bytes], { type: mimeType }),
+      });
+      if (!putResp.ok) throw new Error("Drive resumable PUT failed: " + putResp.status);
+      return await putResp.json();
+    }
+
+    // Grant the admin email reader on a specific file.  Belt-and-braces
+    // alongside the folder-level grant; ensures admin can fetch even if
+    // a file ends up outside the folder.
+    async function shareFileWithAdmin(fileId) {
+      try {
+        const auth = await driveAuthHeader();
+        await fetch("https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(fileId) + "/permissions?sendNotificationEmail=false", {
+          method: "POST",
+          headers: { Authorization: auth, "Content-Type": "application/json" },
+          body: JSON.stringify({ role: "reader", type: "user", emailAddress: ADMIN_EMAIL }),
+        });
+      } catch (e) { console.warn("[cg] could not share file " + fileId, e); }
+    }
+
     try {
-      // Collect every photo across every cert into a flat list so we can
-      // run uploads with bounded concurrency.
+      const folder = await ensureDateFolder();
+      const folderId = folder.id;
+      const folderName = folder.name;
+      const ownerEmail = (window.cgGoogleAuth.isSignedIn() && JSON.parse(localStorage.getItem(GOOGLE_TOKEN_KEY) || "null") || {}).email || null;
+
+      // Collect every photo across every cert into a flat list.
       const photoTasks = [];
       (d.certs || []).forEach(function (cert, certIdx) {
         const certRef = (cert.certData && cert.certData.certRef) || ("cert" + (certIdx + 1));
@@ -2926,8 +3233,7 @@
         const safeRef = String(certRef).replace(/[^A-Za-z0-9_-]/g, "_");
         (cert.photos || []).forEach(function (photo, photoIdx) {
           if (!photo || !photo.dataUrl) return;
-          // Skip photos that already have a driveFileId (re-send case).
-          if (photo.driveFileId) return;
+          if (photo.driveFileId) return;  // re-send: already uploaded
           const m = String(photo.dataUrl).match(/^data:([^;]+);base64,(.+)$/);
           if (!m) return;
           const mimeType = m[1];
@@ -2937,56 +3243,29 @@
             : ("Photo_" + (photoIdx + 1));
           const filename = [safeRef, addrSlug, String(photoIdx + 1).padStart(2, "0"), labelSlug]
             .filter(Boolean).join("_") + "." + ext;
-          photoTasks.push({ certIdx: certIdx, photoIdx: photoIdx, certRef: certRef,
-                            filename: filename, mimeType: mimeType, base64: m[2],
-                            label: photo.label || "" });
+          photoTasks.push({
+            certIdx: certIdx, photoIdx: photoIdx, certRef: certRef,
+            filename: filename, mimeType: mimeType, base64: m[2],
+            label: photo.label || "",
+          });
         });
       });
 
-      // Bounded-concurrency runner: 4 uploads in flight at once. Phones
-      // on cellular connections handle this comfortably and it lets a
-      // 60-photo daybook finish in ~10–20 s instead of ~60 s.
-      const CONCURRENCY = 4;
+      const CONCURRENCY = 3;
       let uploaded = 0, failed = 0;
       let cursor = 0;
-      // Two-step direct-to-Drive upload. Step 1 asks Netlify for a Drive
-      // resumable upload session URL (small JSON, no body cap concerns).
-      // Step 2 PUTs the photo bytes straight to googleapis.com — Netlify
-      // never sees the bytes, so the 6 MB request body cap doesn't apply
-      // and any photo size up to Drive's 5 GB limit goes through.
+
       async function uploadOne(task) {
         try {
-          const sessionResp = await fetch("/api/create-upload-session", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              certRef: task.certRef,
-              filename: task.filename,
-              mimeType: task.mimeType,
-            }),
-          });
-          if (!sessionResp.ok) { failed++; return; }
-          const sessionData = await sessionResp.json().catch(function () { return {}; });
-          if (!sessionData || !sessionData.sessionUrl) { failed++; return; }
-
-          // Convert base64 -> binary Blob for the direct PUT to Drive.
-          let blob;
-          try {
-            const bin = atob(task.base64);
-            const bytes = new Uint8Array(bin.length);
-            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-            blob = new Blob([bytes], { type: task.mimeType });
-          } catch (e) { failed++; return; }
-
-          const putResp = await fetch(sessionData.sessionUrl, {
-            method: "PUT",
-            headers: { "Content-Type": task.mimeType },
-            body: blob,
-          });
-          if (!putResp.ok) { failed++; return; }
-          const driveData = await putResp.json().catch(function () { return {}; });
+          const bin = atob(task.base64);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          const driveData = await driveUploadBytes(bytes, task.mimeType, task.filename, folderId);
           if (!driveData || !driveData.id) { failed++; return; }
-
+          // The folder share already grants admin access to children, but
+          // we add an explicit per-file grant in case the engineer ever
+          // moves the file out of the folder.
+          shareFileWithAdmin(driveData.id);
           const cert = d.certs[task.certIdx];
           if (cert && cert.photos && cert.photos[task.photoIdx]) {
             cert.photos[task.photoIdx] = {
@@ -2995,17 +3274,23 @@
               mimeType: task.mimeType,
               driveFileId: driveData.id,
               webViewLink: driveData.webViewLink || null,
+              ownerEmail: ownerEmail,
+              folderId: folderId,
+              folderName: folderName,
             };
           }
           uploaded++;
-        } catch (e) { failed++; }
+        } catch (e) {
+          console.warn("[cg] photo upload failed", e);
+          failed++;
+        }
       }
+
       async function worker() {
         while (true) {
           const i = cursor++;
           if (i >= photoTasks.length) return;
           await uploadOne(photoTasks[i]);
-          // Update the modal occasionally so the engineer sees progress.
           if ((uploaded + failed) % 3 === 0) {
             try {
               showStatusModal({
@@ -3022,19 +3307,39 @@
       for (let i = 0; i < CONCURRENCY; i++) workers.push(worker());
       await Promise.all(workers);
 
-      // Persist the slimmed daybook so a refresh after this point doesn't
-      // re-upload the same photos.
-      try { writeDaybook(d); } catch (e) {}
+      // Upload one cert JSON per cert into the same folder.  Strip the
+      // photo dataUrls (they've been replaced by Drive references above).
+      try {
+        for (let ci = 0; ci < (d.certs || []).length; ci++) {
+          const cert = d.certs[ci];
+          const certRef = (cert.certData && cert.certData.certRef) || ("cert" + (ci + 1));
+          const safeRef = String(certRef).replace(/[^A-Za-z0-9_-]/g, "_");
+          const certJson = JSON.stringify(cert, null, 2);
+          const certBytes = new TextEncoder().encode(certJson);
+          try {
+            const cdata = await driveUploadBytes(certBytes, "application/json", safeRef + ".json", folderId);
+            if (cdata && cdata.id) {
+              shareFileWithAdmin(cdata.id);
+              cert._certJsonDriveId = cdata.id;
+            }
+          } catch (e) { console.warn("[cg] cert JSON upload failed", certRef, e); }
+        }
+      } catch (e) { console.warn("[cg] cert JSON pass failed", e); }
 
+      try { writeDaybook(d); } catch (e) {}
       if (failed > 0) {
         console.warn("[cg] " + failed + " of " + photoTasks.length + " photo uploads failed");
       }
     } catch (e) {
-      // Drive layer failed entirely — fall through. The downstream send
-      // path will still try to email/queue whatever's in d (with original
-      // dataUrls intact, which means the existing too-big behaviour will
-      // re-appear, but the local JSON download is still produced).
-      console.warn("[cg] photo Drive upload pass failed", e);
+      console.warn("[cg] OAuth Drive upload pass failed", e);
+      showStatusModal({
+        title: "Drive upload failed",
+        message: "Could not upload to your Google Drive: " + (e && e.message ? e.message : e) + "\n\nThe local JSON download is still your backup.",
+        buttons: [{ label: "OK", primary: true }],
+      });
+      // Don't return — fall through so the engineer at least gets the
+      // local JSON.  (Photo bytes will still be in the daybook and the
+      // send-daybook email path may still work for small days.)
     }
     // ────────────────────────────────────────────────────────────────────
 

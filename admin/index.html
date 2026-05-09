@@ -109,7 +109,10 @@
         } catch (e) { /* never block boot */ }
       })();
     </script>
+    <!-- BUILD: oauth-drive-v1 2026-05-09 -->
     <script type="module" crossorigin src="./assets/index-Zyqhj0a4.js"></script>
+    <!-- Google Identity Services for OAuth-based Drive photo fetch. -->
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
     <style>
       #gs-import-overlay {
         position: fixed; inset: 0; z-index: 99999;
@@ -155,6 +158,155 @@
   </head>
   <body>
     <div id="root"></div>
+
+    <!-- Google Sign-In for Drive photo fetch (admin reads engineers' Drives). -->
+    <button id="gs-google-btn" type="button" aria-label="Google sign-in" style="
+      position: fixed; right: 16px; top: 16px; z-index: 9998;
+      background: #fff; color: #18252D; border: 1px solid #d0d7de;
+      border-radius: 999px; padding: 8px 14px;
+      font: 600 12px/1 ui-sans-serif, system-ui, 'Segoe UI', Roboto, sans-serif;
+      cursor: pointer; align-items: center; gap: 8px; display: inline-flex;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+    "><span id="gs-google-btn-label">Sign in with Google (Drive)</span></button>
+
+    <script>
+    // ─── Google OAuth controller (admin side) ─────────────────────────
+    // Photos in records are stored on engineers' personal Drives and
+    // shared with the admin email.  The admin browser fetches each photo
+    // directly with this OAuth token (drive.readonly scope).  No service
+    // account is involved in the read path.
+    const GS_GOOGLE_CLIENT_ID = "576198550128-bk285smjtv35fnnnmql205vl09nre7nr.apps.googleusercontent.com";
+    const GS_GOOGLE_TOKEN_KEY = "gs_google_token";
+    const GS_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
+
+    window.gsGoogleAuth = (function () {
+      let tokenClient = null;
+      let pendingResolve = null;
+      let pendingReject = null;
+
+      function readStored() {
+        try { return JSON.parse(localStorage.getItem(GS_GOOGLE_TOKEN_KEY) || "null"); }
+        catch (e) { return null; }
+      }
+      function writeStored(t) {
+        try { localStorage.setItem(GS_GOOGLE_TOKEN_KEY, JSON.stringify(t)); } catch (e) {}
+      }
+      function clearStored() {
+        try { localStorage.removeItem(GS_GOOGLE_TOKEN_KEY); } catch (e) {}
+      }
+      function isFresh(t) {
+        return t && t.access_token && t.expires_at && (t.expires_at - Date.now() > 60 * 1000);
+      }
+      async function fetchEmail(accessToken) {
+        try {
+          const r = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+            headers: { Authorization: "Bearer " + accessToken },
+          });
+          if (!r.ok) return null;
+          const j = await r.json();
+          return (j && j.email) || null;
+        } catch (e) { return null; }
+      }
+      function ensureClient() {
+        if (tokenClient) return true;
+        if (!window.google || !window.google.accounts || !window.google.accounts.oauth2) return false;
+        tokenClient = window.google.accounts.oauth2.initTokenClient({
+          client_id: GS_GOOGLE_CLIENT_ID,
+          scope: GS_DRIVE_SCOPE,
+          prompt: "",
+          callback: function (resp) {
+            if (resp && resp.access_token) {
+              const expiresIn = (resp.expires_in || 3600) * 1000;
+              const t = {
+                access_token: resp.access_token,
+                expires_at: Date.now() + expiresIn - 30 * 1000,
+                email: null,
+                scope: resp.scope || GS_DRIVE_SCOPE,
+              };
+              fetchEmail(resp.access_token).then(function (em) {
+                t.email = em || null;
+                writeStored(t);
+                renderButton();
+                if (pendingResolve) { pendingResolve(t); pendingResolve = null; pendingReject = null; }
+              });
+            } else if (pendingReject) {
+              pendingReject(new Error("oauth declined")); pendingResolve = null; pendingReject = null;
+            }
+          },
+          error_callback: function (err) {
+            if (pendingReject) { pendingReject(new Error("oauth error: " + (err && err.type))); pendingResolve = null; pendingReject = null; }
+          },
+        });
+        return true;
+      }
+      function requestToken(opts) {
+        return new Promise(function (resolve, reject) {
+          let waited = 0;
+          const tick = setInterval(function () {
+            if (ensureClient()) {
+              clearInterval(tick);
+              pendingResolve = resolve; pendingReject = reject;
+              try {
+                tokenClient.requestAccessToken({ prompt: opts && opts.silent ? "" : "consent" });
+              } catch (e) { reject(e); }
+            } else if ((waited += 200) >= 8000) {
+              clearInterval(tick);
+              reject(new Error("Google Identity Services failed to load"));
+            }
+          }, 200);
+        });
+      }
+      async function getValidToken(opts) {
+        const stored = readStored();
+        if (isFresh(stored)) return stored;
+        try { return await requestToken({ silent: true }); }
+        catch (e) {
+          if (opts && opts.interactive === false) throw e;
+          return await requestToken({ silent: false });
+        }
+      }
+      function signOut() {
+        const t = readStored();
+        if (t && t.access_token && window.google && window.google.accounts && window.google.accounts.oauth2) {
+          try { window.google.accounts.oauth2.revoke(t.access_token, function () {}); } catch (e) {}
+        }
+        clearStored();
+        renderButton();
+      }
+      function renderButton() {
+        const lbl = document.getElementById("gs-google-btn-label");
+        if (!lbl) return;
+        const t = readStored();
+        if (isFresh(t)) lbl.textContent = t.email ? ("Drive: " + t.email) : "Drive signed in";
+        else lbl.textContent = "Sign in with Google (Drive)";
+      }
+      function isSignedIn() { return isFresh(readStored()); }
+      function wireButton() {
+        const btn = document.getElementById("gs-google-btn");
+        if (!btn || btn.__wired) return;
+        btn.__wired = true;
+        let pressTimer = null;
+        btn.addEventListener("touchstart", function () {
+          pressTimer = setTimeout(function () { signOut(); pressTimer = null; }, 800);
+        });
+        btn.addEventListener("touchend", function () {
+          if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+        });
+        btn.addEventListener("click", function () {
+          requestToken({ silent: false }).catch(function (err) {
+            console.warn("[gs] Google sign-in failed", err);
+            alert("Google sign-in failed: " + (err && err.message));
+          });
+        });
+      }
+      document.addEventListener("DOMContentLoaded", function () {
+        wireButton();
+        renderButton();
+      });
+      return { getValidToken, isSignedIn, signOut, renderButton };
+    })();
+    // ──────────────────────────────────────────────────────────────────
+    </script>
 
     <script>
     // ============================================================
@@ -1014,13 +1166,38 @@
     return match;
   }
 
-  // Resolve a photo entry to raw bytes + mime type. Supports both legacy
-  // entries (ph.dataUrl) and new Drive-backed entries (ph.driveFileId). For
-  // Drive entries we lazy-fetch through /api/get-photo, which proxies via
-  // the service account so the admin browser doesn't need Google auth.
+  // Resolve a photo entry to raw bytes + mime type. Supports legacy
+  // dataUrl entries and Drive-backed entries.  Drive entries are now
+  // OAuth-fetched directly from googleapis.com using the admin's own
+  // Google session (drive.readonly scope) — engineers grant the admin
+  // email reader on their files at upload time.  We still fall back to
+  // the legacy /api/get-photo (service-account proxy) for older records
+  // that pre-date the OAuth migration.
   async function loadPhotoBytes(ph) {
-    // Drive-backed entry: lazy-fetch.
     if (ph && ph.driveFileId) {
+      // Try OAuth-direct first.
+      try {
+        if (window.gsGoogleAuth) {
+          const tok = await window.gsGoogleAuth.getValidToken({ interactive: false });
+          if (tok && tok.access_token) {
+            const url = "https://www.googleapis.com/drive/v3/files/" +
+              encodeURIComponent(ph.driveFileId) + "?alt=media";
+            const resp = await fetch(url, {
+              headers: { Authorization: "Bearer " + tok.access_token },
+            });
+            if (resp.ok) {
+              const buf = await resp.arrayBuffer();
+              const mime = (ph.mimeType || resp.headers.get("content-type") || "image/jpeg").toLowerCase();
+              return { bytes: new Uint8Array(buf), isPng: mime.indexOf("png") !== -1 };
+            }
+            // 401/403 → admin's token doesn't see this file.  Fall back.
+            console.warn("[gs] OAuth Drive fetch failed " + resp.status + " for " + ph.driveFileId + " — falling back to /api/get-photo");
+          }
+        }
+      } catch (e) {
+        console.warn("[gs] OAuth Drive fetch errored", e, "— falling back to /api/get-photo");
+      }
+      // Legacy SA proxy fallback.
       const adminKey = (function () {
         try { return sessionStorage.getItem("gsAdminKey") || ""; } catch (e) { return ""; }
       })();
@@ -1028,9 +1205,7 @@
         "/api/get-photo?id=" + encodeURIComponent(ph.driveFileId),
         { headers: { "x-admin-key": adminKey } }
       );
-      if (!resp.ok) {
-        throw new Error("drive fetch failed: HTTP " + resp.status);
-      }
+      if (!resp.ok) throw new Error("drive fetch failed: HTTP " + resp.status);
       const buf = await resp.arrayBuffer();
       const mime = (ph.mimeType || resp.headers.get("content-type") || "image/jpeg").toLowerCase();
       return { bytes: new Uint8Array(buf), isPng: mime.indexOf("png") !== -1 };

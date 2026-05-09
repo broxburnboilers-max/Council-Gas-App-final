@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en" class="dark">
-<!-- BUILD: oauth-drive-v1 2026-05-09 -->
+<!-- BUILD: oauth-drive-v2-pill-always 2026-05-09 -->
   <head>
     <meta charset="UTF-8" />
     <title>Citizen Gas</title>
@@ -1535,10 +1535,10 @@ window.cgGoogleAuth = (function () {
   function refreshVisibility() {
     const btn = document.getElementById("cg-google-btn");
     if (!btn) return;
-    // Show whenever the React app is past its own sign-in screen.
-    const slot = document.getElementById("cg-slot-picker");
-    const onSigninScreen = slot && slot.style.display === "flex";
-    btn.style.display = onSigninScreen ? "none" : "inline-flex";
+    // Always show the Google sign-in pill — engineers must be able to
+    // sign in to Drive at any point (including on the engineer sign-in
+    // screen) so photos can be saved when a job starts.
+    btn.style.display = "inline-flex";
     renderButton();
   }
 

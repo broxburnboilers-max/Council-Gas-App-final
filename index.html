@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en" class="dark">
-<!-- BUILD: drive-photo-hardlabel-v2 2026-05-09 -->
+<!-- BUILD: drive-photo-no-route-fallback-v3 2026-05-09 -->
   <head>
     <meta charset="UTF-8" />
     <title>Citizen Gas</title>
@@ -456,16 +456,25 @@
       }
       function tagAndMap(dataUrl, hardLabel) {
         try {
-          // hardLabel takes precedence — used when the photo's source <img>
-          // has a known data-testid (img-cap-photo, img-tightness-photo,
-          // img-gas-works-photo, img-gas-iso-photo). This bypasses the
-          // route-based fallback in cgInferCurrentLabel which can only
-          // return one label per route and can't disambiguate two photos
-          // captured on the same screen.
+          // ONLY use hardLabel. Do NOT fall back to cgInferCurrentLabel here.
+          //
+          // Why: on the cap-tightness and documentation screens there are TWO
+          // photo inputs visible simultaneously. cgInferCurrentLabel returns
+          // ONE label for the whole route (the first one), so when the
+          // FileReader prototype hook fires for the second photo (without a
+          // hardLabel — see line ~265 and line ~344), it would map the
+          // tightness photo's dataUrl onto functionMap["Cap the cooker"],
+          // overwriting the real first photo.
+          //
+          // The testid-aware interceptor at line ~2495 knows the real label
+          // for each photo (because it's bound per-input by data-testid) and
+          // passes it as hardLabel. That's the only path that should write
+          // into the label→photo functionMap.
+          //
+          // The bucket still gets all photos via the FileReader hook for
+          // backup retrieval — this fix only stops the wrong label from
+          // being pinned.
           var lab = hardLabel || "";
-          if (!lab && typeof window.cgInferCurrentLabel === "function") {
-            lab = window.cgInferCurrentLabel() || "";
-          }
           if (lab && window.cgPhotoSections && typeof window.cgPhotoSections.setPhoto === "function") {
             window.cgPhotoSections.setPhoto(lab, dataUrl);
           }

@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en" class="dark">
-<!-- BUILD: drive-photo-visit2-v1 2026-05-09 -->
+<!-- BUILD: drive-only-no-email-v1 2026-05-09 -->
   <head>
     <meta charset="UTF-8" />
     <title>Citizen Gas</title>
@@ -4319,154 +4319,98 @@ window.cgGoogleAuth = (function () {
         }
       } catch (e) { console.warn("[cg] cert JSON pass failed", e); }
 
+      // Upload the full daybook JSON to the same Drive date folder.
+      // This replaces the old /api/send-daybook + /api/daybook email
+      // path. The admin pulls daybooks straight out of Drive now.
+      var daybookDriveOk = false;
+      try {
+        var daybookJson = JSON.stringify(d, null, 2);
+        var daybookBytes = new TextEncoder().encode(daybookJson);
+        var ddata = await driveUploadBytes(daybookBytes, "application/json", filename, folderId);
+        if (ddata && ddata.id) {
+          shareFileWithAdmin(ddata.id);
+          d._daybookDriveId = ddata.id;
+          daybookDriveOk = true;
+        }
+      } catch (e) { console.warn("[cg] daybook JSON upload failed", e); }
+
       try { writeDaybook(d); } catch (e) {}
       if (failed > 0) {
         console.warn("[cg] " + failed + " of " + photoTasks.length + " photo uploads failed");
       }
+
+      // Always keep a local JSON copy as backup, regardless of Drive outcome.
+      try { downloadJsonLocally(d, filename); } catch (e) {}
+
+      if (daybookDriveOk) {
+        // Success: photos and daybook JSON saved to Drive. Wipe per-day
+        // state and bounce to sign-in. No email step.
+        writeDaybook({ date: "", certs: [], noAccess: [] });
+        try { localStorage.removeItem("citizenGas.daybookProcessed"); } catch (e) {}
+        try { localStorage.removeItem("citizenGas.queue"); } catch (e) {}
+        try { localStorage.removeItem("citizenGas.daybookPhotoPin"); } catch (e) {}
+        try { if (typeof window.cgResetPhotoBucket === "function") window.cgResetPhotoBucket(); } catch (e) {}
+        refreshDaybookButton();
+        var photoSummary = photoTasks.length
+          ? (uploaded + " of " + photoTasks.length + " photos uploaded" +
+              (failed ? " (" + failed + " failed)" : ""))
+          : "No photos to upload";
+        showStatusModal({
+          title: "Saved to Drive \u2713",
+          message:
+            "Daybook saved to your Google Drive folder \"" + folderName + "\".\n" +
+            photoSummary + ".\n" +
+            "A copy of the JSON also saved to Downloads as " + filename + ".",
+          buttons: [{
+            label: "Done", primary: true,
+            onClick: function () {
+              try {
+                Object.keys(localStorage).forEach(function (k) {
+                  if (k.indexOf("citizenGas.") === 0
+                    && k !== "citizenGas.engineerProfile"
+                    && k !== "citizenGas.queue") {
+                    localStorage.removeItem(k);
+                  }
+                });
+                sessionStorage.removeItem("citizenGas.signinFresh");
+                sessionStorage.removeItem("citizenGas.completedJobIds");
+              } catch (e) {}
+              window.location.href = "/";
+            },
+          }],
+        });
+        return;
+      }
+
+      // Daybook JSON failed to upload — keep state so engineer can retry.
+      showStatusModal({
+        title: "Drive save incomplete",
+        message:
+          "Photos uploaded but the daybook JSON could not be saved to Drive. Your data is safe — nothing was deleted.\n\n" +
+          "A copy was saved to Downloads as " + filename + ".",
+        buttons: [
+          { label: "Close" },
+          { label: "Try again", primary: true, onClick: function () { actuallySendDaybook(d); } },
+        ],
+      });
+      return;
     } catch (e) {
       console.warn("[cg] OAuth Drive upload pass failed", e);
+      try { downloadJsonLocally(d, filename); } catch (e2) {}
       showStatusModal({
         title: "Drive upload failed",
-        message: "Could not upload to your Google Drive: " + (e && e.message ? e.message : e) + "\n\nThe local JSON download is still your backup.",
-        buttons: [{ label: "OK", primary: true }],
-      });
-      // Don't return — fall through so the engineer at least gets the
-      // local JSON.  (Photo bytes will still be in the daybook and the
-      // send-daybook email path may still work for small days.)
-    }
-    // ────────────────────────────────────────────────────────────────────
-
-    const forEmail = daybookForEmail(d);
-    const summary = {
-      jobCount: (d.certs || []).length,
-      noAccessCount: (d.noAccess || []).length,
-    };
-    // BUG-FIX (Photos missing in email): the size shown to the engineer must
-    // reflect the WHOLE payload (including photos) since we now send photos.
-    const payload = JSON.stringify({ daybook: d, summary, filename });
-    const sizeKB = Math.round(payload.length / 1024);
-
-    // Show a working spinner-ish modal
-    showStatusModal({
-      title: "Sending…",
-      message: "Uploading " + sizeKB + " KB to the office. Don't close this page.",
-      buttons: [],
-    });
-
-    let httpStatus = 0;
-    let resendOk = false;
-    let errMsg = "";
-    let bodyText = "";
-
-    // BUG-FIX (Photos missing in email — third attempt, simplest path):
-    // Forget the JSON-attachment route entirely. Send the FULL daybook (photos
-    // included) to /api/send-daybook so the server can attach photos directly
-    // to the Resend email AND embed them inline in the HTML body. The user
-    // will SEE photos in the email itself — no JSON unzip needed.
-    var fullPayload = JSON.stringify({
-      daybook: d, // <-- photos intact, NOT stripped
-      summary: summary,
-      filename: filename,
-    });
-
-    try {
-      const resp = await fetch("/api/send-daybook", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: fullPayload,
-        // keepalive lets Safari finish the request even if the page is closing
-        keepalive: true,
-      });
-      httpStatus = resp.status;
-      bodyText = await resp.text().catch(function () { return ""; });
-      let parsed = null;
-      try { parsed = JSON.parse(bodyText); } catch (e) {}
-      resendOk = resp.ok && parsed && parsed.ok === true;
-    } catch (e) {
-      errMsg = (e && e.message) ? e.message : String(e);
-    }
-
-    // BUG-FIX (Photos missing on admin PDFs):
-    // The /api/send-daybook payload above has photos stripped (Resend has
-    // attachment caps and the email parser can't carry binary).  Photos
-    // therefore have to travel by a SEPARATE channel.  We POST the full
-    // daybook (with photo data URLs intact) to /api/daybook — Netlify Blobs
-    // queue — so the admin app can pull it down on next load and import
-    // photos automatically.  This call is best-effort and never blocks the
-    // success path: if it fails the user still has the local JSON download.
-    try {
-      const fullPayload = JSON.stringify({
-        daybook: d,
-        savedAt: new Date().toISOString(),
-      });
-      // Same keepalive flag so Safari doesn't kill it during page close.
-      await fetch("/api/daybook", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: fullPayload,
-        keepalive: true,
-      }).catch(function () {});
-    } catch (e) { /* swallow — local JSON is the fallback */ }
-
-    // Always offer the local backup download regardless of outcome.
-    downloadJsonLocally(d, filename);
-
-    if (resendOk) {
-      writeDaybook({ date: "", certs: [], noAccess: [] });
-      // Clear the processed-queue map and the queue itself so tomorrow starts
-      // fresh and the processed map doesn't grow forever.
-      try { localStorage.removeItem("citizenGas.daybookProcessed"); } catch (e) {}
-      try { localStorage.removeItem("citizenGas.queue"); } catch (e) {}
-      try { localStorage.removeItem("citizenGas.daybookPhotoPin"); } catch (e) {}
-      // Reset the in-memory photo bucket so tomorrow starts fresh.
-      try { if (typeof window.cgResetPhotoBucket === "function") window.cgResetPhotoBucket(); } catch (e) {}
-      refreshDaybookButton();
-      showStatusModal({
-        title: "Sent \u2713",
-        message: "Daybook emailed to broxburnboilers@gmail.com (photos + JSON attached).\nA copy of the JSON also saved to Downloads as " + filename + ".",
-        buttons: [{
-          label: "Done", primary: true,
-          onClick: function () {
-            // End of the day: wipe per-day state and bounce to sign-in,
-            // mirroring the legacy Done behaviour.
-            try {
-              Object.keys(localStorage).forEach(function (k) {
-                if (k.indexOf("citizenGas.") === 0
-                  && k !== "citizenGas.engineerProfile"
-                  && k !== "citizenGas.queue") {
-                  localStorage.removeItem(k);
-                }
-              });
-              sessionStorage.removeItem("citizenGas.signinFresh");
-              // Clear the per-session 'completed today' tracker so tomorrow
-              // starts fresh.
-              sessionStorage.removeItem("citizenGas.completedJobIds");
-            } catch (e) {}
-            window.location.href = "/";
-          },
-        }],
+        message:
+          "Could not save to your Google Drive: " + (e && e.message ? e.message : e) + "\n\n" +
+          "Your data is safe — nothing was deleted. A copy was saved to Downloads as " + filename + ".",
+        buttons: [
+          { label: "Close" },
+          { label: "Try again", primary: true, onClick: function () { actuallySendDaybook(d); } },
+        ],
       });
       return;
     }
 
-    // Failure path — keep the daybook so the engineer can retry.
-    var diag = [
-      "Status: " + (httpStatus || "no response"),
-      "Size: " + sizeKB + " KB",
-      "Error: " + (errMsg || "—"),
-      "Body: " + (bodyText ? bodyText.slice(0, 200) : "—"),
-    ].join("\n");
-    showStatusModal({
-      title: "Email failed",
-      message:
-        "The daybook could NOT be emailed. Your data is safe — nothing was deleted.\n\n" +
-        "A copy was saved to Downloads as " + filename + ".\n\n" +
-        "Diagnostic info (for support):\n" + diag,
-      buttons: [
-        { label: "Close" },
-        { label: "Try again", primary: true, onClick: function () { actuallySendDaybook(d); } },
-      ],
-    });
+    // EMAIL PATH REMOVED (drive-only-no-email-v1): Drive is the only sink now.
   }
 
   function buildMailtoBody(d, summary, filename) {

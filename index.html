@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en" class="dark">
-<!-- BUILD: photo-sections-v1 2026-05-09 -->
+<!-- BUILD: photo-label-everywhere-v1 2026-05-09 -->
   <head>
     <meta charset="UTF-8" />
     <title>Citizen Gas</title>
@@ -417,6 +417,22 @@
           img.src = dataUrl;
         } catch (e) { cb(dataUrl); }
       }
+      // Helper: write into the per-job functionMap so the buildRecord
+      // primary path picks the photo up by label, AND tag the bucket entry
+      // with fnLabel so the legacy fallback can still build the right
+      // filename. We always do BOTH, regardless of which photo flow was used
+      // (manual address screen, per-screen photo box, or Today's Jobs).
+      function tagAndMap(dataUrl) {
+        try {
+          var lab = (typeof window.cgInferCurrentLabel === "function")
+            ? (window.cgInferCurrentLabel() || "")
+            : "";
+          if (lab && window.cgPhotoSections && typeof window.cgPhotoSections.setPhoto === "function") {
+            window.cgPhotoSections.setPhoto(lab, dataUrl);
+          }
+          return lab;
+        } catch (e) { return ""; }
+      }
       function pushIfNew(dataUrl) {
         if (typeof dataUrl !== "string") return;
         if (dataUrl.indexOf("data:image/") !== 0) return;
@@ -425,15 +441,27 @@
         // (catches near-duplicates from re-renders that re-encode).
         for (var i = 0; i < b.length; i++) {
           if (!b[i]) continue;
-          if (b[i].dataUrl === dataUrl) return;
+          if (b[i].dataUrl === dataUrl) {
+            // Even on dedup, if the engineer is now on a screen with a
+            // recognised label and the previous entry had none, upgrade it.
+            var lab0 = tagAndMap(dataUrl);
+            if (lab0 && !b[i].fnLabel) b[i].fnLabel = lab0;
+            return;
+          }
           if (b[i].dataUrl &&
               b[i].dataUrl.length === dataUrl.length &&
-              b[i].dataUrl.slice(0, 200) === dataUrl.slice(0, 200)) return;
+              b[i].dataUrl.slice(0, 200) === dataUrl.slice(0, 200)) {
+            var lab1 = tagAndMap(dataUrl);
+            if (lab1 && !b[i].fnLabel) b[i].fnLabel = lab1;
+            return;
+          }
         }
+        // Brand-new entry: pin label and map it.
+        var fnLabel = tagAndMap(dataUrl);
         // If the photo is small enough already (<100KB) skip compression to
         // save CPU. Otherwise downscale before storing.
         if (dataUrl.length < 100 * 1024) {
-          window.__cgPhotoBucket.push({ dataUrl: dataUrl, capturedAt: Date.now() });
+          window.__cgPhotoBucket.push({ dataUrl: dataUrl, capturedAt: Date.now(), fnLabel: fnLabel });
           return;
         }
         compressDataUrl(dataUrl, function (compressed) {
@@ -442,7 +470,12 @@
           for (var j = 0; j < b2.length; j++) {
             if (b2[j] && b2[j].dataUrl === compressed) return;
           }
-          window.__cgPhotoBucket.push({ dataUrl: compressed, capturedAt: Date.now() });
+          // Re-map under the compressed dataUrl too (the cert.photos and
+          // upload pass uses this exact value).
+          if (fnLabel && window.cgPhotoSections && typeof window.cgPhotoSections.setPhoto === "function") {
+            try { window.cgPhotoSections.setPhoto(fnLabel, compressed); } catch (e) {}
+          }
+          window.__cgPhotoBucket.push({ dataUrl: compressed, capturedAt: Date.now(), fnLabel: fnLabel });
         });
       }
       window.cgPushPhotoIfNew = pushIfNew;
@@ -1844,7 +1877,7 @@ window.cgGoogleAuth = (function () {
         if (!p || !p.dataUrl) return;
         if (seen[p.dataUrl]) return;
         seen[p.dataUrl] = true;
-        photos.push({ label: "capture", dataUrl: p.dataUrl, addr: "" });
+        photos.push({ label: (p.fnLabel || "capture"), fnLabel: p.fnLabel || "", dataUrl: p.dataUrl, addr: "" });
       });
     } catch (e) {}
 
@@ -2104,7 +2137,7 @@ window.cgGoogleAuth = (function () {
           var fp = p.dataUrl.length + "|" + p.dataUrl.slice(0, 200);
           if (seen[fp]) continue;
           seen[fp] = true;
-          out2.push({ label: p.label, dataUrl: p.dataUrl });
+          out2.push({ label: (p.fnLabel || p.label || "Photo"), dataUrl: p.dataUrl });
         }
         return out2;
       })(),
@@ -2389,6 +2422,38 @@ window.cgGoogleAuth = (function () {
     if (/^Cooker$/i.test(t)) return "Cooker";
     return "";
   }
+
+  // Global label inferer — every photo capture path uses this to decide
+  // which function the photo represents based on the current screen.
+  // Returns one of: Door, Cooker, Hob, Gas Fire, Boiler, Fault,
+  // Warning Notice, Materials — or "" if no recognised screen.
+  window.cgInferCurrentLabel = function () {
+    try {
+      // Boiler page → always Boiler
+      if (typeof isOnBoilerPage === "function" && isOnBoilerPage()) return "Boiler";
+      // Gas fire page → only when Yes is selected
+      if (typeof isOnGasFirePage === "function" && isOnGasFirePage()
+          && typeof gasFireYes === "function" && gasFireYes()) return "Gas Fire";
+      // Cooker/Hob page → only when Yes selected; pick from __cgCookerExtra.type
+      if (typeof isOnCookerHobPage === "function" && isOnCookerHobPage()
+          && typeof cookerHobYes === "function" && cookerHobYes()) {
+        var ch = cookerOrHobLabel();
+        if (ch) return ch;
+      }
+      // Faults page → only when Yes selected; warning notice takes precedence
+      // when any warning-yes is set on that same page.
+      if (typeof isOnFaultsPage === "function" && isOnFaultsPage()) {
+        if (typeof anyWarningNoticeYes === "function" && anyWarningNoticeYes()) return "Warning Notice";
+        if (typeof faultsYes === "function" && faultsYes()) return "Fault";
+      }
+      // Materials page → only when Yes selected
+      if (typeof isOnMaterialsPage === "function" && isOnMaterialsPage()
+          && typeof materialsYes === "function" && materialsYes()) return "Materials";
+      // Address page (manual entry path) → Door
+      if (typeof isOnAddressPage === "function" && isOnAddressPage()) return "Door";
+    } catch (e) {}
+    return "";
+  };
 
   // ── Photo box UI ──
   function makePhotoBox(opts) {
@@ -3724,12 +3789,12 @@ window.cgGoogleAuth = (function () {
           orphans.forEach(function (p, i) {
             var target = emptyCerts[i % emptyCerts.length];
             target.photos = target.photos || [];
-            target.photos.push({ label: "capture", dataUrl: p.dataUrl });
+            target.photos.push({ label: (p.fnLabel || "capture"), dataUrl: p.dataUrl });
           });
         } else if ((d.certs || []).length === 1) {
           // Single-cert daybook: attach all orphans to it.
           d.certs[0].photos = (d.certs[0].photos || []).concat(
-            orphans.map(function (p) { return { label: "capture", dataUrl: p.dataUrl }; })
+            orphans.map(function (p) { return { label: (p.fnLabel || "capture"), dataUrl: p.dataUrl }; })
           );
         }
         // Persist the backfilled daybook so the local download has photos.

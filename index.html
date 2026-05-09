@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en" class="dark">
-<!-- BUILD: drive-photo-extra-screens-v1 2026-05-09 -->
+<!-- BUILD: drive-photo-visit2-v1 2026-05-09 -->
   <head>
     <meta charset="UTF-8" />
     <title>Citizen Gas</title>
@@ -2119,7 +2119,7 @@ window.cgGoogleAuth = (function () {
       // pinned before this change shipped).
       photos: (function () {
         if (functionMap && typeof functionMap === "object") {
-          var ORDER = ["Door", "Cooker", "Hob", "Cap the cooker", "Tightness test", "Gas Fire", "Boiler", "Fault", "Warning Notice", "Gas works", "Gas isolation", "Materials"];
+          var ORDER = ["Door", "Cooker", "Hob", "Cap the cooker", "Install cooker", "Tightness test", "Gas Fire", "Boiler", "Fault", "Warning Notice", "Gas works", "Gas isolation", "Materials"];
           var out = [];
           for (var k = 0; k < ORDER.length; k++) {
             var lab = ORDER[k];
@@ -2147,7 +2147,7 @@ window.cgGoogleAuth = (function () {
         }
         var out2 = [];
         // Preserve order: Door, Cooker, Hob, Gas Fire, Boiler, Fault, Warning Notice, Materials, then anything else
-        var ORDER2 = ["Door", "Cooker", "Hob", "Cap the cooker", "Tightness test", "Gas Fire", "Boiler", "Fault", "Warning Notice", "Gas works", "Gas isolation", "Materials"];
+        var ORDER2 = ["Door", "Cooker", "Hob", "Cap the cooker", "Install cooker", "Tightness test", "Gas Fire", "Boiler", "Fault", "Warning Notice", "Gas works", "Gas isolation", "Materials"];
         for (var k2 = 0; k2 < ORDER2.length; k2++) {
           if (byLabel[ORDER2[k2]]) { out2.push(byLabel[ORDER2[k2]]); delete byLabel[ORDER2[k2]]; }
         }
@@ -2387,12 +2387,34 @@ window.cgGoogleAuth = (function () {
   // cgPhotoBucket, and write into the functionMap so buildRecord's primary
   // path picks it up by label.
   (function () {
+    // Static prefix → default label. The cap-photo prefix is special: on
+    // visit 2 the same input is for the INSTALLED cooker, not the capped
+    // one (heading reads "Install cooker & tightness test" /
+    // "1. Install cooker / hob"). We resolve the label dynamically at
+    // capture time by reading the section heading.
     var INPUT_LABEL_BY_TESTID = {
-      "cap-photo":       "Cap the cooker",
+      "cap-photo":       "Cap the cooker",   // overridden below if visit=2
       "tightness-photo": "Tightness test",
       "gas-works-photo": "Gas works",
       "gas-iso-photo":   "Gas isolation",
     };
+    // Read live screen text to detect visit 2 on the cap-tightness page.
+    // The bundle renders the section heading "1. Install cooker / hob" on
+    // visit 2 and "1. Cap the cooker" on visit 1. The page-level title is
+    // "Install cooker & tightness test" vs "Cap cooker & tightness test".
+    function resolveLabelDynamic(prefix) {
+      var staticLabel = INPUT_LABEL_BY_TESTID[prefix] || "";
+      if (prefix !== "cap-photo") return staticLabel;
+      try {
+        var t = (document.body && document.body.innerText) || "";
+        // Match either the section heading or the page title for visit 2.
+        if (/\bInstall cooker\s*\/\s*hob\b/i.test(t)
+            || /\bInstall cooker\s*&\s*tightness test\b/i.test(t)) {
+          return "Install cooker";
+        }
+      } catch (e) {}
+      return staticLabel;
+    }
     function attachOne(input) {
       try {
         if (!input || input.dataset.cgPhotoLabelBound === "1") return;
@@ -2405,10 +2427,11 @@ window.cgGoogleAuth = (function () {
           if (tid === "input-" + key || tid === key) { prefix = key; break; }
         }
         if (!prefix) return;
-        var label = INPUT_LABEL_BY_TESTID[prefix];
         input.dataset.cgPhotoLabelBound = "1";
         input.addEventListener("change", function () {
           try {
+            // Resolve label at capture time so visit 2 wins over visit 1.
+            var label = resolveLabelDynamic(prefix);
             var f = input.files && input.files[0];
             if (!f) return;
             var reader = new FileReader();
@@ -2569,13 +2592,24 @@ window.cgGoogleAuth = (function () {
       // Materials page → only when Yes selected
       if (typeof isOnMaterialsPage === "function" && isOnMaterialsPage()
           && typeof materialsYes === "function" && materialsYes()) return "Materials";
-      // Cap-the-cooker / Tightness-test page — the file-input interceptor
-      // above tags photos directly by data-testid, but we still return a
-      // sensible default in case the bundle ever renders a non-tagged
-      // <img> here (e.g. preview thumbnail rebuild). Default to
-      // "Cap the cooker" because it's the first photo on that screen.
+      // Cap-the-cooker / Install-cooker / Tightness-test page — the
+      // file-input interceptor above tags photos directly by data-testid,
+      // but we still return a sensible default in case the bundle ever
+      // renders a non-tagged <img> here (preview thumbnail rebuild).
+      // Pick "Install cooker" on visit 2 (heading text reads
+      // "Install cooker / hob" or "Install cooker & tightness test"),
+      // otherwise "Cap the cooker".
       var hh = (function () { try { return String(window.location.hash || window.location.pathname || ""); } catch (e) { return ""; } })();
-      if (hh.indexOf("/property/cap-tightness") !== -1) return "Cap the cooker";
+      if (hh.indexOf("/property/cap-tightness") !== -1) {
+        try {
+          var bt = (document.body && document.body.innerText) || "";
+          if (/\bInstall cooker\s*\/\s*hob\b/i.test(bt)
+              || /\bInstall cooker\s*&\s*tightness test\b/i.test(bt)) {
+            return "Install cooker";
+          }
+        } catch (e) {}
+        return "Cap the cooker";
+      }
       if (hh.indexOf("/property/documentation") !== -1) return "Gas works";
       // Address page (manual entry path) → Door
       if (typeof isOnAddressPage === "function" && isOnAddressPage()) return "Door";

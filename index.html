@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en" class="dark">
-<!-- BUILD: photo-dedup-v1 2026-05-09 -->
+<!-- BUILD: photo-sections-v1 2026-05-09 -->
   <head>
     <meta charset="UTF-8" />
     <title>Citizen Gas</title>
@@ -1873,7 +1873,7 @@ window.cgGoogleAuth = (function () {
     return null;
   }
 
-  function buildRecord(prop, engineerProfile, photos) {
+  function buildRecord(prop, engineerProfile, photos, functionMap) {
     // BUG 2 FIX: Use the engineer-entered date, not today.
     const workDate = parseEngineerDate(prop.date) || new Date();
     const certDate = workDate.toISOString();
@@ -2078,22 +2078,35 @@ window.cgGoogleAuth = (function () {
       finalChecks,
       signatureData: {},
       engineerData,
-      // Final dedup just before storing on the cert: collapse any
-      // remaining duplicate dataUrls (multiple capture paths can pick up
-      // the same photo at slightly different moments).
+      // Photos: prefer the function-keyed map captured per screen
+      // (Door / Cooker | Hob / Gas Fire / Boiler / Fault / Warning Notice
+      // / Materials).  Each entry becomes one cert.photos slot with the
+      // function name as its label.  Fall back to the legacy bucket-
+      // dedup path when no functionMap is present (older queue entries
+      // pinned before this change shipped).
       photos: (function () {
+        if (functionMap && typeof functionMap === "object") {
+          var ORDER = ["Door", "Cooker", "Hob", "Gas Fire", "Boiler", "Fault", "Warning Notice", "Materials"];
+          var out = [];
+          for (var k = 0; k < ORDER.length; k++) {
+            var lab = ORDER[k];
+            var du = functionMap[lab];
+            if (du) out.push({ label: lab, dataUrl: du });
+          }
+          return out;
+        }
+        // Legacy fallback: dedup bucket photos.
         var seen = Object.create(null);
-        var out = [];
+        var out2 = [];
         for (var i = 0; i < attachedPhotos.length; i++) {
           var p = attachedPhotos[i];
           if (!p || !p.dataUrl) continue;
-          // Fingerprint = length + first 200 chars (cheap, near-zero collisions for image data URLs)
           var fp = p.dataUrl.length + "|" + p.dataUrl.slice(0, 200);
           if (seen[fp]) continue;
           seen[fp] = true;
-          out.push({ label: p.label, dataUrl: p.dataUrl });
+          out2.push({ label: p.label, dataUrl: p.dataUrl });
         }
-        return out;
+        return out2;
       })(),
       // FEATURE (Materials in daily email): carry materials through to the cert
       // so the email body / admin import / JSON download can list them.
@@ -2142,7 +2155,7 @@ window.cgGoogleAuth = (function () {
   // Process exactly one queue entry into the daybook. Photos must be passed
   // in (already harvested), because by the time we async over to handle them
   // the DOM may be gone.
-  function ingestQueueItem(item, photos, profile) {
+  function ingestQueueItem(item, photos, profile, functionMap) {
     if (!item || !item.id) return false;
     // BUG-FIX (Visit-1 / Visit-2 / no-access capture loss):
     //
@@ -2208,7 +2221,7 @@ window.cgGoogleAuth = (function () {
           });
         }
       } else {
-        const rec = buildRecord(prop, profile, photos);
+        const rec = buildRecord(prop, profile, photos, functionMap);
         // BUG 1 FIX: De-dup by certRef + work-date so two visits to the same
         // address on different days both survive, and a re-send of the same
         // visit (same date) replaces (doesn't duplicate). Previously dedup
@@ -2253,16 +2266,566 @@ window.cgGoogleAuth = (function () {
     let count = 0;
     queue.forEach(function (item, idx) {
       let photos = [];
-      if (item && item.id && pin[item.id] && Array.isArray(pin[item.id])) {
-        photos = pin[item.id];
+      let functionMap = null;
+      if (item && item.id && pin[item.id]) {
+        var slot = pin[item.id];
+        if (Array.isArray(slot)) {
+          photos = slot;  // legacy array shape
+        } else if (slot && typeof slot === "object") {
+          photos = Array.isArray(slot.photos) ? slot.photos : [];
+          functionMap = slot.functionMap || null;
+        }
       } else if (idx === queue.length - 1 && latestPhotos && latestPhotos.length) {
         photos = latestPhotos;
       }
-      if (ingestQueueItem(item, photos, profile)) count++;
+      if (ingestQueueItem(item, photos, profile, functionMap)) count++;
     });
     if (count) refreshDaybookButton();
     return count;
   }
+
+  // ─── PHOTO SECTIONS — mandatory function-named photos per screen ────
+  // Engineers must capture one photo per function on the relevant screen
+  // (Door / Cooker | Hob / Gas Fire / Boiler / Fault / Warning Notice /
+  // Materials).  The photo is keyed by function label inside a per-job
+  // map persisted in sessionStorage; at queue-write time the map is
+  // pinned alongside the queue id so buildRecord can convert it into the
+  // function-keyed cert.photos array.  Continue/Next is blocked until
+  // the photo is taken on screens where it's required.
+  const PHOTO_FN_CURRENT_KEY = "citizenGas.photoFunctions.current";
+  // sessionStorage so it lives across screen navigations within one job
+  // and is naturally cleared on tab close / new job reset.
+  function readCurrentFnMap() {
+    try { return JSON.parse(sessionStorage.getItem(PHOTO_FN_CURRENT_KEY) || "{}"); }
+    catch (e) { return {}; }
+  }
+  function writeCurrentFnMap(m) {
+    try { sessionStorage.setItem(PHOTO_FN_CURRENT_KEY, JSON.stringify(m || {})); } catch (e) {}
+  }
+  function clearCurrentFnMap() {
+    try { sessionStorage.removeItem(PHOTO_FN_CURRENT_KEY); } catch (e) {}
+  }
+  function setCurrentFnPhoto(label, dataUrl) {
+    var m = readCurrentFnMap();
+    m[label] = dataUrl;
+    writeCurrentFnMap(m);
+  }
+  function getCurrentFnPhoto(label) {
+    return readCurrentFnMap()[label] || null;
+  }
+
+  window.cgPhotoSections = {
+    read: readCurrentFnMap,
+    setPhoto: setCurrentFnPhoto,
+    getPhoto: getCurrentFnPhoto,
+    clear: clearCurrentFnMap,
+  };
+
+  // ── Screen detectors (route + body-text fingerprints) ──
+  function _hash() {
+    try { return String(window.location.hash || window.location.pathname || ""); } catch (e) { return ""; }
+  }
+  function _bodyText() { try { return document.body.innerText || ""; } catch (e) { return ""; } }
+
+  function isOnAddressPage() {
+    var h = _hash();
+    if (h.indexOf("/property/address") !== -1) return true;
+    return !!document.querySelector('[data-testid="input-address1"]');
+  }
+  function isOnBoilerPage() {
+    var h = _hash();
+    if (h.indexOf("/property/boiler") !== -1) return true;
+    return !!document.querySelector('[data-testid="input-boiler-make"]');
+  }
+  function isOnFaultsPage() {
+    var h = _hash();
+    if (h.indexOf("/property/faults") !== -1) return true;
+    return /Any faults\?/i.test(_bodyText());
+  }
+  function isOnMaterialsPage() {
+    var h = _hash();
+    if (h.indexOf("/property/materials") !== -1) return true;
+    return /Were any materials used on this job\?/i.test(_bodyText());
+  }
+
+  // Yes/No screen-question state — reads the live React DOM by inspecting
+  // the gradient class the bundle puts on the selected button.
+  function _yesSelected(testid) {
+    try {
+      var btn = document.querySelector('[data-testid="' + testid + '-yes"]');
+      if (!btn) return false;
+      // The bundle marks the active answer with the citizen-gradient-bg
+      // class (same pattern as visit selector).
+      return /citizen-gradient-bg/.test(btn.className || "")
+        || btn.getAttribute("aria-pressed") === "true";
+    } catch (e) { return false; }
+  }
+  function gasFireYes() { return _yesSelected("button-fire"); }
+  function cookerHobYes() { return _yesSelected("button-cooker"); }
+  function faultsYes() { return _yesSelected("button-has-faults"); }
+  function materialsYes() { return _yesSelected("button-materials-any"); }
+  // Warning notice yes/no testid is `button-warning-${faultIdx}-yes/-no`.
+  function anyWarningNoticeYes() {
+    try {
+      var btns = document.querySelectorAll('[data-testid^="button-warning-"]');
+      for (var i = 0; i < btns.length; i++) {
+        var t = btns[i].getAttribute("data-testid") || "";
+        if (/^button-warning-\d+-yes$/.test(t)
+            && (/citizen-gradient-bg/.test(btns[i].className || "")
+                || btns[i].getAttribute("aria-pressed") === "true")) {
+          return true;
+        }
+      }
+    } catch (e) {}
+    return false;
+  }
+
+  // The cooker/hob screen needs to know whether the engineer picked
+  // Cooker or Hob.  The existing __cgCookerExtra carries that selection
+  // (writeCookerExtraToStorage stores `type`).
+  function cookerOrHobLabel() {
+    var t = (window.__cgCookerExtra && window.__cgCookerExtra.type) || "";
+    if (/^Hob$/i.test(t)) return "Hob";
+    if (/^Cooker$/i.test(t)) return "Cooker";
+    return "";
+  }
+
+  // ── Photo box UI ──
+  function makePhotoBox(opts) {
+    // opts = { id, label, anchor, required }
+    var existing = document.getElementById(opts.id);
+    if (existing) return existing;
+    var wrap = document.createElement("div");
+    wrap.id = opts.id;
+    wrap.className = "cg-photo-section";
+    wrap.style.cssText = [
+      "margin:14px 0","padding:14px",
+      "border:2px dashed rgba(242,104,42,0.65)",
+      "border-radius:12px",
+      "background:rgba(242,104,42,0.08)",
+      "color:#fff",
+      "font:500 14px/1.4 ui-sans-serif,system-ui,sans-serif",
+      "display:flex","flex-direction:column","gap:10px",
+    ].join(";");
+
+    var heading = document.createElement("div");
+    heading.style.cssText = "font:700 14px/1.2 ui-sans-serif,system-ui,sans-serif;color:#F2682A;";
+    heading.textContent = "Take photo: " + opts.label + (opts.required ? " (required)" : "");
+    wrap.appendChild(heading);
+
+    var hint = document.createElement("div");
+    hint.className = "cg-photo-hint";
+    hint.style.cssText = "font:500 12px/1.4 ui-sans-serif,system-ui,sans-serif;color:rgba(255,255,255,0.85);";
+    hint.textContent = opts.required
+      ? "Please take a photo to continue."
+      : "Optional photo for this section.";
+    wrap.appendChild(hint);
+
+    var thumb = document.createElement("img");
+    thumb.className = "cg-photo-thumb";
+    thumb.style.cssText = "max-width:100%;max-height:200px;border-radius:8px;display:none;align-self:center;";
+    wrap.appendChild(thumb);
+
+    var fileInput = document.createElement("input");
+    fileInput.type = "file";
+    fileInput.accept = "image/*";
+    fileInput.setAttribute("capture", "environment");
+    fileInput.style.display = "none";
+    wrap.appendChild(fileInput);
+
+    var btnRow = document.createElement("div");
+    btnRow.style.cssText = "display:flex;gap:8px;flex-wrap:wrap;";
+
+    var takeBtn = document.createElement("button");
+    takeBtn.type = "button";
+    takeBtn.textContent = "Take photo";
+    takeBtn.style.cssText = [
+      "flex:1 1 auto","min-width:140px",
+      "padding:12px 18px","border-radius:10px","border:0",
+      "background:#F2682A","color:#fff",
+      "font:700 14px/1 ui-sans-serif,system-ui,sans-serif",
+      "cursor:pointer",
+    ].join(";");
+    takeBtn.addEventListener("click", function () { fileInput.click(); });
+    btnRow.appendChild(takeBtn);
+
+    var retakeBtn = document.createElement("button");
+    retakeBtn.type = "button";
+    retakeBtn.textContent = "Retake";
+    retakeBtn.style.cssText = [
+      "flex:0 0 auto","padding:12px 18px","border-radius:10px",
+      "border:1px solid rgba(255,255,255,0.5)",
+      "background:transparent","color:#fff",
+      "font:600 14px/1 ui-sans-serif,system-ui,sans-serif",
+      "cursor:pointer","display:none",
+    ].join(";");
+    retakeBtn.addEventListener("click", function () { fileInput.click(); });
+    btnRow.appendChild(retakeBtn);
+
+    wrap.appendChild(btnRow);
+
+    function showCaptured(dataUrl) {
+      thumb.src = dataUrl;
+      thumb.style.display = "block";
+      takeBtn.style.display = "none";
+      retakeBtn.style.display = "inline-block";
+      hint.textContent = "Photo captured. Tap Retake to replace.";
+      hint.style.color = "rgba(255,255,255,0.65)";
+    }
+    function showEmpty() {
+      thumb.style.display = "none";
+      thumb.removeAttribute("src");
+      takeBtn.style.display = "inline-block";
+      retakeBtn.style.display = "none";
+      hint.textContent = opts.required
+        ? "Please take a photo to continue."
+        : "Optional photo for this section.";
+      hint.style.color = "rgba(255,255,255,0.85)";
+    }
+
+    // Pre-fill from existing capture for this label.
+    var existingDataUrl = getCurrentFnPhoto(opts.label);
+    if (existingDataUrl) showCaptured(existingDataUrl);
+    else showEmpty();
+
+    fileInput.addEventListener("change", function () {
+      var f = fileInput.files && fileInput.files[0];
+      if (!f) return;
+      var reader = new FileReader();
+      reader.onload = function () {
+        var url = reader.result;
+        if (typeof url !== "string") return;
+        // Down-scale for storage size (sessionStorage cap ~5 MB).
+        compressDataUrl(url, 1600, 0.78).then(function (compressed) {
+          setCurrentFnPhoto(opts.label, compressed);
+          showCaptured(compressed);
+          fileInput.value = "";
+          // Re-evaluate continue button immediately.
+          try { applyContinueGate(opts.continueGate); } catch (e) {}
+        }).catch(function () {
+          setCurrentFnPhoto(opts.label, url);
+          showCaptured(url);
+          fileInput.value = "";
+          try { applyContinueGate(opts.continueGate); } catch (e) {}
+        });
+      };
+      reader.readAsDataURL(f);
+    });
+
+    opts.anchor.appendChild(wrap);
+    return wrap;
+  }
+
+  // Compress a data URL via canvas — same pattern the React bundle uses
+  // (the file goes through __cgPhotoBucket but only in some flows; on
+  // these injected screens we control the capture path entirely).
+  function compressDataUrl(dataUrl, maxDim, quality) {
+    return new Promise(function (resolve, reject) {
+      var img = new Image();
+      img.onload = function () {
+        try {
+          var w = img.naturalWidth, h = img.naturalHeight;
+          if (w > maxDim || h > maxDim) {
+            var r = Math.min(maxDim / w, maxDim / h);
+            w = Math.round(w * r); h = Math.round(h * r);
+          }
+          var canvas = document.createElement("canvas");
+          canvas.width = w; canvas.height = h;
+          var ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, w, h);
+          resolve(canvas.toDataURL("image/jpeg", quality || 0.78));
+        } catch (e) { reject(e); }
+      };
+      img.onerror = reject;
+      img.src = dataUrl;
+    });
+  }
+
+  // ── Continue button blocker ──
+  function applyContinueGate(gate) {
+    if (!gate || !gate.required) return;
+    var btn = document.querySelector(gate.selector);
+    if (!btn) return;
+    var have = !!gate.hasPhoto();
+    if (have) {
+      btn.removeAttribute("aria-disabled");
+      btn.style.removeProperty("opacity");
+      btn.style.removeProperty("pointer-events");
+      btn.title = "";
+      btn.__cgPhotoBlocked = false;
+    } else {
+      btn.setAttribute("aria-disabled", "true");
+      btn.style.opacity = "0.4";
+      btn.style.pointerEvents = "none";
+      btn.title = "Please take a photo to continue";
+      btn.__cgPhotoBlocked = true;
+    }
+    // Also install a capturing click interceptor (in case React rerenders
+    // and clears our pointer-events style).  Only install once.
+    if (!btn.__cgPhotoInterceptInstalled) {
+      btn.__cgPhotoInterceptInstalled = true;
+      btn.addEventListener("click", function (e) {
+        if (btn.__cgPhotoBlocked) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          // Surface a hint by flashing the photo box, if present.
+          if (gate.flashId) {
+            var box = document.getElementById(gate.flashId);
+            if (box) {
+              box.style.transition = "border-color 200ms";
+              box.style.borderColor = "#ff5252";
+              setTimeout(function () { box.style.borderColor = "rgba(242,104,42,0.65)"; }, 600);
+            }
+          }
+        }
+      }, true);
+    }
+  }
+
+  // ── Per-screen ensureUi rules ──
+  function ensurePhotoSectionsUi() {
+    // Door — Property address screen, always required.
+    if (isOnAddressPage()) {
+      var addr1 = document.querySelector('[data-testid="input-address1"]');
+      if (addr1) {
+        var anchor = addr1.closest('div[class*="card"], div[class*="rounded"], form, section') || addr1.parentElement;
+        if (anchor && !document.getElementById("cg-photo-door")) {
+          makePhotoBox({
+            id: "cg-photo-door", label: "Door", anchor: anchor, required: true,
+            continueGate: {
+              selector: '[data-testid="button-continue"]',
+              required: true,
+              hasPhoto: function () { return !!getCurrentFnPhoto("Door"); },
+              flashId: "cg-photo-door",
+            },
+          });
+        }
+      }
+      applyContinueGate({
+        selector: '[data-testid="button-continue"]',
+        required: true,
+        hasPhoto: function () { return !!getCurrentFnPhoto("Door"); },
+        flashId: "cg-photo-door",
+      });
+    } else {
+      var elDoor = document.getElementById("cg-photo-door");
+      if (elDoor) elDoor.remove();
+    }
+
+    // Cooker / Hob — only when engineer answered Yes on the cooker/hob page.
+    if (isOnCookerHobPage()) {
+      var cookerLabel = cookerOrHobLabel();  // "Cooker" or "Hob" (or "")
+      var cookerYes = cookerHobYes() || !!cookerLabel;
+      if (cookerYes && cookerLabel) {
+        var anchorCk = document.querySelector('[data-testid="input-cooker-make"]');
+        var ck = anchorCk && (anchorCk.closest('div[class*="card"], div[class*="rounded"], form, section') || anchorCk.parentElement);
+        if (ck && !document.getElementById("cg-photo-cookerhob")) {
+          makePhotoBox({
+            id: "cg-photo-cookerhob", label: cookerLabel, anchor: ck, required: true,
+            continueGate: {
+              selector: '[data-testid="button-continue"]',
+              required: true,
+              hasPhoto: function () { return !!getCurrentFnPhoto(cookerLabel); },
+              flashId: "cg-photo-cookerhob",
+            },
+          });
+        }
+        applyContinueGate({
+          selector: '[data-testid="button-continue"]',
+          required: true,
+          hasPhoto: function () { return !!getCurrentFnPhoto(cookerLabel); },
+          flashId: "cg-photo-cookerhob",
+        });
+      } else {
+        // Cooker/Hob = No → not required; remove if previously injected.
+        var elCk = document.getElementById("cg-photo-cookerhob");
+        if (elCk) elCk.remove();
+      }
+    } else {
+      var elCk2 = document.getElementById("cg-photo-cookerhob");
+      if (elCk2) elCk2.remove();
+    }
+
+    // Gas Fire — only when engineer answered Yes.
+    if (isOnGasFirePage()) {
+      // ALSO: scrub the bundle's "Visual inspection only!" notice on this
+      // screen, per user spec.
+      try {
+        var nodes = document.querySelectorAll("body *");
+        for (var i = 0; i < nodes.length; i++) {
+          var el = nodes[i];
+          if (el.children && el.children.length === 0) {
+            var t = (el.textContent || "").trim();
+            if (t === "Visual inspection only!" || t === "Visual inspection only)" || t === "Visual inspection only") {
+              el.style.display = "none";
+            }
+          }
+        }
+      } catch (e) {}
+      var fireYes = gasFireYes();
+      if (fireYes) {
+        var anchorFire = document.querySelector('[data-testid="input-fire-model"]')
+                      || document.querySelector('[data-testid="input-fire-make"]');
+        var fa = anchorFire && (anchorFire.closest('div[class*="card"], div[class*="rounded"], form, section') || anchorFire.parentElement);
+        if (fa && !document.getElementById("cg-photo-gasfire")) {
+          makePhotoBox({
+            id: "cg-photo-gasfire", label: "Gas Fire", anchor: fa, required: true,
+            continueGate: {
+              selector: '[data-testid="button-continue"]',
+              required: true,
+              hasPhoto: function () { return !!getCurrentFnPhoto("Gas Fire"); },
+              flashId: "cg-photo-gasfire",
+            },
+          });
+        }
+        applyContinueGate({
+          selector: '[data-testid="button-continue"]',
+          required: true,
+          hasPhoto: function () { return !!getCurrentFnPhoto("Gas Fire"); },
+          flashId: "cg-photo-gasfire",
+        });
+      } else {
+        var elGf = document.getElementById("cg-photo-gasfire");
+        if (elGf) elGf.remove();
+      }
+    } else {
+      var elGf2 = document.getElementById("cg-photo-gasfire");
+      if (elGf2) elGf2.remove();
+    }
+
+    // Boiler — always required when shown.
+    if (isOnBoilerPage()) {
+      var anchorBoi = document.querySelector('[data-testid="input-boiler-make"]')
+                   || document.querySelector('[data-testid="input-boiler-model"]')
+                   || document.querySelector('[data-testid="input-boiler-location"]');
+      var ba = anchorBoi && (anchorBoi.closest('div[class*="card"], div[class*="rounded"], form, section') || anchorBoi.parentElement);
+      if (ba && !document.getElementById("cg-photo-boiler")) {
+        makePhotoBox({
+          id: "cg-photo-boiler", label: "Boiler", anchor: ba, required: true,
+          continueGate: {
+            selector: '[data-testid="button-continue"]',
+            required: true,
+            hasPhoto: function () { return !!getCurrentFnPhoto("Boiler"); },
+            flashId: "cg-photo-boiler",
+          },
+        });
+      }
+      applyContinueGate({
+        selector: '[data-testid="button-continue"]',
+        required: true,
+        hasPhoto: function () { return !!getCurrentFnPhoto("Boiler"); },
+        flashId: "cg-photo-boiler",
+      });
+    } else {
+      var elBo = document.getElementById("cg-photo-boiler");
+      if (elBo) elBo.remove();
+    }
+
+    // Fault — only when engineer answered Yes to Any faults?
+    if (isOnFaultsPage()) {
+      var faYes = faultsYes();
+      if (faYes) {
+        // Anchor on the first fault-details input (the bundle renders one
+        // per fault row and indexes by ${A}).
+        var anchorFa = document.querySelector('[data-testid^="input-fault-details-"]');
+        var fal = anchorFa && (anchorFa.closest('div[class*="card"], div[class*="rounded"], form, section') || anchorFa.parentElement);
+        if (!fal) fal = document.body;
+        if (!document.getElementById("cg-photo-fault")) {
+          makePhotoBox({
+            id: "cg-photo-fault", label: "Fault", anchor: fal, required: true,
+            continueGate: {
+              selector: '[data-testid="button-continue"]',
+              required: true,
+              hasPhoto: function () { return !!getCurrentFnPhoto("Fault"); },
+              flashId: "cg-photo-fault",
+            },
+          });
+        }
+        // Warning Notice — required only when engineer answered Yes to
+        // any "Warning notice fixed?" on this screen.
+        if (anyWarningNoticeYes()) {
+          if (!document.getElementById("cg-photo-warning")) {
+            makePhotoBox({
+              id: "cg-photo-warning", label: "Warning Notice", anchor: fal, required: true,
+              continueGate: {
+                selector: '[data-testid="button-continue"]',
+                required: true,
+                hasPhoto: function () { return !!getCurrentFnPhoto("Warning Notice"); },
+                flashId: "cg-photo-warning",
+              },
+            });
+          }
+          applyContinueGate({
+            selector: '[data-testid="button-continue"]',
+            required: true,
+            hasPhoto: function () {
+              return !!getCurrentFnPhoto("Fault") && !!getCurrentFnPhoto("Warning Notice");
+            },
+            flashId: "cg-photo-warning",
+          });
+        } else {
+          var elWn = document.getElementById("cg-photo-warning");
+          if (elWn) elWn.remove();
+          applyContinueGate({
+            selector: '[data-testid="button-continue"]',
+            required: true,
+            hasPhoto: function () { return !!getCurrentFnPhoto("Fault"); },
+            flashId: "cg-photo-fault",
+          });
+        }
+      } else {
+        var elFa = document.getElementById("cg-photo-fault");
+        if (elFa) elFa.remove();
+        var elWn2 = document.getElementById("cg-photo-warning");
+        if (elWn2) elWn2.remove();
+      }
+    } else {
+      var elFa2 = document.getElementById("cg-photo-fault");
+      if (elFa2) elFa2.remove();
+      var elWn3 = document.getElementById("cg-photo-warning");
+      if (elWn3) elWn3.remove();
+    }
+
+    // Materials — only when engineer answered Yes.
+    if (isOnMaterialsPage()) {
+      var matYes = materialsYes();
+      if (matYes) {
+        var anchorMat = document.querySelector('[data-testid="input-materials-details"]');
+        var ma = anchorMat && (anchorMat.closest('div[class*="card"], div[class*="rounded"], form, section') || anchorMat.parentElement);
+        if (!ma) ma = document.body;
+        if (!document.getElementById("cg-photo-materials")) {
+          makePhotoBox({
+            id: "cg-photo-materials", label: "Materials", anchor: ma, required: true,
+            continueGate: {
+              selector: '[data-testid="button-continue"]',
+              required: true,
+              hasPhoto: function () { return !!getCurrentFnPhoto("Materials"); },
+              flashId: "cg-photo-materials",
+            },
+          });
+        }
+        applyContinueGate({
+          selector: '[data-testid="button-continue"]',
+          required: true,
+          hasPhoto: function () { return !!getCurrentFnPhoto("Materials"); },
+          flashId: "cg-photo-materials",
+        });
+      } else {
+        var elMa = document.getElementById("cg-photo-materials");
+        if (elMa) elMa.remove();
+      }
+    } else {
+      var elMa2 = document.getElementById("cg-photo-materials");
+      if (elMa2) elMa2.remove();
+    }
+  }
+
+  // Run on a 600ms loop (matches the cadence of other ensure*Ui helpers).
+  // Also run on hashchange and popstate so route transitions land fast.
+  setInterval(function () { try { ensurePhotoSectionsUi(); } catch (e) {} }, 600);
+  window.addEventListener("hashchange", function () { try { ensurePhotoSectionsUi(); } catch (e) {} });
+  window.addEventListener("popstate",   function () { try { ensurePhotoSectionsUi(); } catch (e) {} });
+  // ────────────────────────────────────────────────────────────────────
 
   // ---------- GAS FIRE EXTRA FIELDS (Location, Type, Heat Input, Op. Pressure) ----------
   // BUG-FIX (Task 1 — gas fire row blank on cert):
@@ -2920,14 +3483,23 @@ window.cgGoogleAuth = (function () {
         try { photos = harvestPhotosFromReview(); } catch (e) {}
       }
       const ret = origSet.apply(this, arguments);
-      if (isQueueWrite && newEntryId && photos.length) {
-        // Pin the photos to this specific queue id, so the sweep can
-        // attach them even if a later send already fired before our
-        // microtask ran.
+      if (isQueueWrite && newEntryId) {
+        // Pin BOTH the legacy photo array AND the new function-keyed map
+        // (Door / Cooker / Hob / Gas Fire / Boiler / Fault / Warning
+        // Notice / Materials).  buildRecord prefers the map when present.
         try {
           const pin = readPhotoPin();
-          pin[newEntryId] = photos;
-          writePhotoPin(pin);
+          // Back-compat: keep array shape on the same pin entry by
+          // storing { photos, functionMap } when we have either.
+          const fnMap = readCurrentFnMap();
+          const fnHasAny = fnMap && Object.keys(fnMap).length > 0;
+          if (photos.length || fnHasAny) {
+            pin[newEntryId] = { photos: photos, functionMap: fnHasAny ? fnMap : null };
+            writePhotoPin(pin);
+          }
+          // Clear the in-progress per-job map now this queue entry has
+          // captured it — keeps a fresh map for the next property.
+          if (fnHasAny) clearCurrentFnMap();
         } catch (e) {}
       }
       if (isQueueWrite) {
@@ -3311,13 +3883,19 @@ window.cgGoogleAuth = (function () {
       const ownerEmail = (window.cgGoogleAuth.isSignedIn() && JSON.parse(localStorage.getItem(GOOGLE_TOKEN_KEY) || "null") || {}).email || null;
 
       // Collect every photo across every cert into a flat list.
+      // Filename rule (per user spec): <address1>-<postcode>-<label>.<ext>
+      // Strip path-illegal chars; keep capitalisation; collapse spaces.
+      function sanitiseForFilename(s) {
+        return String(s || "")
+          .replace(/[\\\/:*?"<>|]/g, "")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
       const photoTasks = [];
       (d.certs || []).forEach(function (cert, certIdx) {
         const certRef = (cert.certData && cert.certData.certRef) || ("cert" + (certIdx + 1));
-        const addrSlug = (cert.certData && cert.certData.instAddr1)
-          ? String(cert.certData.instAddr1).replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40)
-          : "";
-        const safeRef = String(certRef).replace(/[^A-Za-z0-9_-]/g, "_");
+        const addr1Clean = sanitiseForFilename((cert.certData && cert.certData.instAddr1) || "");
+        const postcodeClean = sanitiseForFilename((cert.certData && cert.certData.instPostcode) || "");
         (cert.photos || []).forEach(function (photo, photoIdx) {
           if (!photo || !photo.dataUrl) return;
           if (photo.driveFileId) return;  // re-send: already uploaded
@@ -3325,11 +3903,10 @@ window.cgGoogleAuth = (function () {
           if (!m) return;
           const mimeType = m[1];
           const ext = mimeType === "image/png" ? "png" : (mimeType === "image/webp" ? "webp" : "jpg");
-          const labelSlug = (photo.label && photo.label !== "capture")
-            ? String(photo.label).replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 40)
-            : ("Photo_" + (photoIdx + 1));
-          const filename = [safeRef, addrSlug, String(photoIdx + 1).padStart(2, "0"), labelSlug]
-            .filter(Boolean).join("_") + "." + ext;
+          const labelClean = sanitiseForFilename(photo.label || ("Photo " + (photoIdx + 1)));
+          // <address1>-<postcode>-<label>.<ext>
+          const filename = [addr1Clean, postcodeClean, labelClean]
+            .filter(Boolean).join("-") + "." + ext;
           photoTasks.push({
             certIdx: certIdx, photoIdx: photoIdx, certRef: certRef,
             filename: filename, mimeType: mimeType, base64: m[2],

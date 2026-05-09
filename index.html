@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en" class="dark">
-<!-- BUILD: drive-photo-dedup-v1 2026-05-09 -->
+<!-- BUILD: drive-photo-extra-screens-v1 2026-05-09 -->
   <head>
     <meta charset="UTF-8" />
     <title>Citizen Gas</title>
@@ -2119,7 +2119,7 @@ window.cgGoogleAuth = (function () {
       // pinned before this change shipped).
       photos: (function () {
         if (functionMap && typeof functionMap === "object") {
-          var ORDER = ["Door", "Cooker", "Hob", "Gas Fire", "Boiler", "Fault", "Warning Notice", "Materials"];
+          var ORDER = ["Door", "Cooker", "Hob", "Cap the cooker", "Tightness test", "Gas Fire", "Boiler", "Fault", "Warning Notice", "Gas works", "Gas isolation", "Materials"];
           var out = [];
           for (var k = 0; k < ORDER.length; k++) {
             var lab = ORDER[k];
@@ -2147,7 +2147,7 @@ window.cgGoogleAuth = (function () {
         }
         var out2 = [];
         // Preserve order: Door, Cooker, Hob, Gas Fire, Boiler, Fault, Warning Notice, Materials, then anything else
-        var ORDER2 = ["Door", "Cooker", "Hob", "Gas Fire", "Boiler", "Fault", "Warning Notice", "Materials"];
+        var ORDER2 = ["Door", "Cooker", "Hob", "Cap the cooker", "Tightness test", "Gas Fire", "Boiler", "Fault", "Warning Notice", "Gas works", "Gas isolation", "Materials"];
         for (var k2 = 0; k2 < ORDER2.length; k2++) {
           if (byLabel[ORDER2[k2]]) { out2.push(byLabel[ORDER2[k2]]); delete byLabel[ORDER2[k2]]; }
         }
@@ -2367,6 +2367,113 @@ window.cgGoogleAuth = (function () {
     clear: clearCurrentFnMap,
   };
 
+  // ── NATIVE BUNDLE PHOTO INPUT INTERCEPTOR (drive-photo-extra-screens-v1) ──
+  //
+  // The React bundle has 4 native photo inputs whose photos go into React
+  // property state (NOT into __cgPhotoBucket via the <img> MutationObserver,
+  // because the bundle stores them as data URLs in component state and only
+  // sometimes renders them as <img>). The only reliable hook is the
+  // file-input change event on each input by its data-testid prefix.
+  //
+  // Map of testid prefix → fnLabel:
+  //   "cap-photo"       → "Cap the cooker"   (route /property/cap-tightness)
+  //   "tightness-photo" → "Tightness test"   (route /property/cap-tightness)
+  //   "gas-works-photo" → "Gas works"        (route /property/documentation)
+  //   "gas-iso-photo"   → "Gas isolation"    (route /property/documentation)
+  //
+  // For each, we attach a one-time change listener (idempotent via dataset
+  // marker) the moment the file input shows up in the DOM. On change we
+  // read the file as data URL, tag it with the right fnLabel, push into
+  // cgPhotoBucket, and write into the functionMap so buildRecord's primary
+  // path picks it up by label.
+  (function () {
+    var INPUT_LABEL_BY_TESTID = {
+      "cap-photo":       "Cap the cooker",
+      "tightness-photo": "Tightness test",
+      "gas-works-photo": "Gas works",
+      "gas-iso-photo":   "Gas isolation",
+    };
+    function attachOne(input) {
+      try {
+        if (!input || input.dataset.cgPhotoLabelBound === "1") return;
+        var tid = input.getAttribute("data-testid") || "";
+        // The bundle uses `${testIdPrefix}-input` for the file input itself,
+        // see source: input.testId=`input-${c}` where c is testIdPrefix.
+        // i.e. cap-photo → "input-cap-photo".
+        var prefix = "";
+        for (var key in INPUT_LABEL_BY_TESTID) {
+          if (tid === "input-" + key || tid === key) { prefix = key; break; }
+        }
+        if (!prefix) return;
+        var label = INPUT_LABEL_BY_TESTID[prefix];
+        input.dataset.cgPhotoLabelBound = "1";
+        input.addEventListener("change", function () {
+          try {
+            var f = input.files && input.files[0];
+            if (!f) return;
+            var reader = new FileReader();
+            reader.onload = function () {
+              var url = reader.result;
+              if (typeof url !== "string") return;
+              // Compress before storing so 5 MB JPEGs don't blow up storage.
+              try {
+                if (typeof window.cgPushPhotoIfNew === "function") {
+                  window.cgPushPhotoIfNew(url);
+                }
+              } catch (e) {}
+              // Tag immediately under the correct label, regardless of
+              // what cgInferCurrentLabel would have returned. This is the
+              // deterministic path — no screen guessing.
+              try {
+                if (window.cgPhotoSections && typeof window.cgPhotoSections.setPhoto === "function") {
+                  window.cgPhotoSections.setPhoto(label, url);
+                }
+              } catch (e) {}
+              // Also stamp the most-recent bucket entry with the label so
+              // the legacy fallback path produces the right filename even
+              // if the functionMap pin somehow doesn't fire.
+              try {
+                var b = window.__cgPhotoBucket || [];
+                for (var i = b.length - 1; i >= 0; i--) {
+                  if (b[i] && !b[i].fnLabel) { b[i].fnLabel = label; break; }
+                }
+              } catch (e) {}
+            };
+            reader.readAsDataURL(f);
+          } catch (e) {}
+        }, true);
+      } catch (e) {}
+    }
+    function scanInputs(root) {
+      try {
+        var nodes = (root && root.querySelectorAll)
+          ? root.querySelectorAll('input[type="file"][data-testid^="input-"]')
+          : [];
+        for (var i = 0; i < nodes.length; i++) attachOne(nodes[i]);
+      } catch (e) {}
+    }
+    try {
+      var mo = new MutationObserver(function (records) {
+        for (var r = 0; r < records.length; r++) {
+          var rec = records[r];
+          if (rec.addedNodes) {
+            for (var n = 0; n < rec.addedNodes.length; n++) {
+              var node = rec.addedNodes[n];
+              if (node && node.nodeType === 1) {
+                if (node.tagName === "INPUT") attachOne(node);
+                else scanInputs(node);
+              }
+            }
+          }
+        }
+      });
+      mo.observe(document.documentElement, { childList: true, subtree: true });
+      scanInputs(document.documentElement);
+    } catch (e) {
+      console.warn("[cg] native photo input interceptor failed", e);
+    }
+  })();
+
   // ── Screen detectors (route + body-text fingerprints) ──
   function _hash() {
     try { return String(window.location.hash || window.location.pathname || ""); } catch (e) { return ""; }
@@ -2462,6 +2569,14 @@ window.cgGoogleAuth = (function () {
       // Materials page → only when Yes selected
       if (typeof isOnMaterialsPage === "function" && isOnMaterialsPage()
           && typeof materialsYes === "function" && materialsYes()) return "Materials";
+      // Cap-the-cooker / Tightness-test page — the file-input interceptor
+      // above tags photos directly by data-testid, but we still return a
+      // sensible default in case the bundle ever renders a non-tagged
+      // <img> here (e.g. preview thumbnail rebuild). Default to
+      // "Cap the cooker" because it's the first photo on that screen.
+      var hh = (function () { try { return String(window.location.hash || window.location.pathname || ""); } catch (e) { return ""; } })();
+      if (hh.indexOf("/property/cap-tightness") !== -1) return "Cap the cooker";
+      if (hh.indexOf("/property/documentation") !== -1) return "Gas works";
       // Address page (manual entry path) → Door
       if (typeof isOnAddressPage === "function" && isOnAddressPage()) return "Door";
     } catch (e) {}

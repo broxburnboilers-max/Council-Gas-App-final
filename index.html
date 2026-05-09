@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en" class="dark">
-<!-- BUILD: drive-photo-img-testid-v1 2026-05-09 -->
+<!-- BUILD: drive-photo-hardlabel-v2 2026-05-09 -->
   <head>
     <meta charset="UTF-8" />
     <title>Citizen Gas</title>
@@ -2485,15 +2485,21 @@ window.cgGoogleAuth = (function () {
             reader.onload = function () {
               var url = reader.result;
               if (typeof url !== "string") return;
-              // Compress before storing so 5 MB JPEGs don't blow up storage.
+              // CRITICAL: pass `label` as the hardLabel into pushIfNew so
+              // tagAndMap doesn't fall back to cgInferCurrentLabel(), which
+              // would return the FIRST label for the route (e.g. on the
+              // cap-tightness page it always returns "Cap the cooker")
+              // and overwrite functionMap["Cap the cooker"] with the
+              // tightness photo's dataUrl. Without this, the second photo
+              // on a two-photo screen clobbers the first.
               try {
                 if (typeof window.cgPushPhotoIfNew === "function") {
-                  window.cgPushPhotoIfNew(url);
+                  window.cgPushPhotoIfNew(url, label);
                 }
               } catch (e) {}
-              // Tag immediately under the correct label, regardless of
-              // what cgInferCurrentLabel would have returned. This is the
-              // deterministic path — no screen guessing.
+              // Belt-and-braces: also write directly under the correct
+              // label. setCurrentFnPhoto is the source of truth that
+              // buildRecord reads from at queue time.
               try {
                 if (window.cgPhotoSections && typeof window.cgPhotoSections.setPhoto === "function") {
                   window.cgPhotoSections.setPhoto(label, url);

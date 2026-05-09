@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en" class="dark">
-<!-- BUILD: photo-label-everywhere-v1 2026-05-09 -->
+<!-- BUILD: hide-red-warning-boxes-v1 2026-05-09 -->
   <head>
     <meta charset="UTF-8" />
     <title>Citizen Gas</title>
@@ -2885,11 +2885,47 @@ window.cgGoogleAuth = (function () {
     }
   }
 
+  // Strip the bundle's red destructive-warning panels ("Visual inspection only!"
+  // and "Do not test!") that the engineer reported as empty red boxes above
+  // the Continue button. We can't change the bundle, so we walk the DOM and
+  // remove any rounded div with the destructive border + matching text.
+  var CG_RED_BOX_TEXTS = [
+    "visual inspection only",
+    "do not test",
+  ];
+  function removeRedWarningBoxes() {
+    try {
+      // Targets the bundle's exact class string; matching by class avoids
+      // accidentally removing user-typed text or our own UI.
+      var sel = 'div.border-destructive\\/40, div[class*="border-destructive"]';
+      var nodes = document.querySelectorAll(sel);
+      for (var i = 0; i < nodes.length; i++) {
+        var n = nodes[i];
+        var t = (n.textContent || "").toLowerCase();
+        for (var k = 0; k < CG_RED_BOX_TEXTS.length; k++) {
+          if (t.indexOf(CG_RED_BOX_TEXTS[k]) !== -1) {
+            n.style.display = "none";
+            break;
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
   // Run on a 600ms loop (matches the cadence of other ensure*Ui helpers).
   // Also run on hashchange and popstate so route transitions land fast.
-  setInterval(function () { try { ensurePhotoSectionsUi(); } catch (e) {} }, 600);
-  window.addEventListener("hashchange", function () { try { ensurePhotoSectionsUi(); } catch (e) {} });
-  window.addEventListener("popstate",   function () { try { ensurePhotoSectionsUi(); } catch (e) {} });
+  setInterval(function () {
+    try { ensurePhotoSectionsUi(); } catch (e) {}
+    try { removeRedWarningBoxes(); } catch (e) {}
+  }, 600);
+  window.addEventListener("hashchange", function () {
+    try { ensurePhotoSectionsUi(); } catch (e) {}
+    try { removeRedWarningBoxes(); } catch (e) {}
+  });
+  window.addEventListener("popstate",   function () {
+    try { ensurePhotoSectionsUi(); } catch (e) {}
+    try { removeRedWarningBoxes(); } catch (e) {}
+  });
   // ────────────────────────────────────────────────────────────────────
 
   // ---------- GAS FIRE EXTRA FIELDS (Location, Type, Heat Input, Op. Pressure) ----------

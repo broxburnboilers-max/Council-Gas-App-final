@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en" class="dark">
-<!-- BUILD: drive-photo-compress-native-v6 2026-05-10 -->
+<!-- BUILD: gas-auditor-skip-photos-v1 2026-05-10 -->
   <head>
     <meta charset="UTF-8" />
     <title>Citizen Gas</title>
@@ -233,6 +233,28 @@
       border-radius:999px; padding:8px 18px; font:600 12px/1 ui-sans-serif,system-ui,'Segoe UI',Roboto,sans-serif;
       letter-spacing:0.08em; text-transform:uppercase; cursor:pointer; display:none;
     ">Admin</button>
+
+    <!-- Owner-only Gas Auditor shortcut. Sits above the Admin button on the
+         engineer sign-in screen. On password match, this device is flagged
+         as 'gas auditor' and ALL photo gates are skipped for the duration of
+         the localStorage flag (cleared via the chip in the corner). -->
+    <button id="cg-signin-auditor-btn" type="button" aria-label="Gas Auditor login" style="
+      position:fixed; left:50%; transform:translateX(-50%); bottom:60px; z-index:9997;
+      background:transparent; color:#9aa6ad; border:1px solid #3a4a55;
+      border-radius:999px; padding:8px 18px; font:600 12px/1 ui-sans-serif,system-ui,'Segoe UI',Roboto,sans-serif;
+      letter-spacing:0.08em; text-transform:uppercase; cursor:pointer; display:none;
+    ">Gas Auditor Login</button>
+
+    <!-- Visible chip when gas-auditor mode is active so it's never silently
+         engaged. Tap to disable. -->
+    <button id="cg-auditor-chip" type="button" aria-label="Gas Auditor mode active — tap to disable" style="
+      position:fixed; right:16px; bottom:16px; z-index:9998;
+      background:#f2682a; color:#fff; border:none;
+      border-radius:999px; padding:8px 14px;
+      font:700 11px/1 ui-sans-serif,system-ui,'Segoe UI',Roboto,sans-serif;
+      letter-spacing:0.06em; text-transform:uppercase; cursor:pointer; display:none;
+      box-shadow:0 2px 10px rgba(0,0,0,0.35);
+    ">Auditor mode · tap to exit</button>
 
     <script>
     // BUG-FIX (Photo capture loss):
@@ -782,11 +804,68 @@
         window.location.href = "/admin/";
       });
 
+      // ── Gas Auditor login (owner-only, skips all photo gates) ──
+      // Hash of the owner password. Compared client-side. Hash is in the
+      // bundle so a determined engineer with dev tools could brute-force a
+      // weak password — keep this strong if it ever changes.
+      var GAS_AUDITOR_PW_SHA256 = "6a6ac8386005b00f2af86a300f1ae811527b9d979db505e11ae7c5b85fa679c3";
+      var GAS_AUDITOR_FLAG = "cg_owner_skip_photos";
+      window.cgIsGasAuditor = function () {
+        try { return localStorage.getItem(GAS_AUDITOR_FLAG) === "1"; }
+        catch (e) { return false; }
+      };
+      function sha256Hex(s) {
+        // Returns a Promise<string> with the lowercase hex SHA-256 of s.
+        var enc = new TextEncoder();
+        return crypto.subtle.digest("SHA-256", enc.encode(s)).then(function (buf) {
+          var arr = new Uint8Array(buf);
+          var hex = "";
+          for (var i = 0; i < arr.length; i++) {
+            var h = arr[i].toString(16);
+            if (h.length === 1) h = "0" + h;
+            hex += h;
+          }
+          return hex;
+        });
+      }
+      var auditorBtn = document.getElementById("cg-signin-auditor-btn");
+      var auditorChip = document.getElementById("cg-auditor-chip");
+      if (auditorBtn) {
+        auditorBtn.addEventListener("click", function () {
+          var pw = window.prompt("Enter Gas Auditor password:");
+          if (pw === null) return;
+          sha256Hex(String(pw)).then(function (hex) {
+            if (hex !== GAS_AUDITOR_PW_SHA256) {
+              alert("Incorrect password.");
+              return;
+            }
+            try { localStorage.setItem(GAS_AUDITOR_FLAG, "1"); } catch (e) {}
+            refreshAdminBtns();
+            alert("Gas Auditor mode enabled on this device. Photo requirements are skipped. Tap the orange chip in the corner to exit.");
+          }).catch(function () {
+            alert("Could not verify password (browser crypto unavailable).");
+          });
+        });
+      }
+      if (auditorChip) {
+        auditorChip.addEventListener("click", function () {
+          if (!confirm("Exit Gas Auditor mode? Photo requirements will be enforced again.")) return;
+          try { localStorage.removeItem(GAS_AUDITOR_FLAG); } catch (e) {}
+          refreshAdminBtns();
+          // Reload to re-evaluate every photo gate.
+          location.reload();
+        });
+      }
+
       function refreshAdminBtns() {
         // Engineer-only existing dashboard button.
         adminBtn.style.display = isSignedIn() ? "inline-flex" : "none";
         // Sign-in screen Admin chip: shown only when not signed in.
         signinAdmin.style.display = isSignedIn() ? "none" : "inline-flex";
+        // Gas Auditor button: shown only when not signed in (matches Admin).
+        if (auditorBtn) auditorBtn.style.display = isSignedIn() ? "none" : "inline-flex";
+        // Auditor active chip: shown whenever the flag is set (signed in or not).
+        if (auditorChip) auditorChip.style.display = window.cgIsGasAuditor() ? "inline-flex" : "none";
       }
 
       // ===========================================================
@@ -2728,6 +2807,13 @@ window.cgGoogleAuth = (function () {
   // ── Photo box UI ──
   function makePhotoBox(opts) {
     // opts = { id, label, anchor, required }
+    // Gas Auditor mode: don't inject any photo boxes at all — the UI stays
+    // clean and the continue gate is already short-circuited above.
+    try {
+      if (typeof window.cgIsGasAuditor === "function" && window.cgIsGasAuditor()) {
+        return null;
+      }
+    } catch (e) {}
     var existing = document.getElementById(opts.id);
     if (existing) return existing;
     var wrap = document.createElement("div");
@@ -2886,6 +2972,19 @@ window.cgGoogleAuth = (function () {
     if (!gate || !gate.required) return;
     var btn = document.querySelector(gate.selector);
     if (!btn) return;
+    // Gas Auditor mode (owner-only): treat every gate as already satisfied.
+    // The flag is set by the Gas Auditor Login on the sign-in screen and
+    // persists on this device until the orange chip is tapped.
+    var auditor = false;
+    try { auditor = (typeof window.cgIsGasAuditor === "function") && window.cgIsGasAuditor(); } catch (e) {}
+    if (auditor) {
+      btn.removeAttribute("aria-disabled");
+      btn.style.removeProperty("opacity");
+      btn.style.removeProperty("pointer-events");
+      btn.title = "";
+      btn.__cgPhotoBlocked = false;
+      return;
+    }
     var have = !!gate.hasPhoto();
     if (have) {
       btn.removeAttribute("aria-disabled");

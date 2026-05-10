@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en" class="dark">
-<!-- BUILD: drive-photo-pin-merge-v4 2026-05-10 -->
+<!-- BUILD: drive-photo-trace-v5 2026-05-10 -->
   <head>
     <meta charset="UTF-8" />
     <title>Citizen Gas</title>
@@ -2411,6 +2411,13 @@ window.cgGoogleAuth = (function () {
     var m = readCurrentFnMap();
     m[label] = dataUrl;
     writeCurrentFnMap(m);
+    try {
+      var k = "citizenGas.photoTrace";
+      var arr = JSON.parse(sessionStorage.getItem(k) || "[]");
+      arr.push({ t: Date.now(), e: "setCurrentFnPhoto", p: { label: label, len: (dataUrl||"").length } });
+      if (arr.length > 200) arr = arr.slice(-200);
+      sessionStorage.setItem(k, JSON.stringify(arr));
+    } catch (e) {}
   }
   function getCurrentFnPhoto(label) {
     return readCurrentFnMap()[label] || null;
@@ -2471,10 +2478,31 @@ window.cgGoogleAuth = (function () {
       } catch (e) {}
       return staticLabel;
     }
+    // Debug trace facility: appends to sessionStorage so the daybook
+    // download includes a record of which interceptors fired. Shipped
+    // intentionally to diagnose the missing-photo bug — if this trace
+    // shows attach=ok but change-fired=no for an input, the listener
+    // got bound but the event didn't reach us. If attach=no, the
+    // input never hit the MutationObserver.
+    function cgTrace(event, payload) {
+      try {
+        var k = "citizenGas.photoTrace";
+        var arr = JSON.parse(sessionStorage.getItem(k) || "[]");
+        arr.push({ t: Date.now(), e: event, p: payload || null });
+        if (arr.length > 200) arr = arr.slice(-200);
+        sessionStorage.setItem(k, JSON.stringify(arr));
+      } catch (e) {}
+    }
+    window.cgPhotoTrace = function () {
+      try { return JSON.parse(sessionStorage.getItem("citizenGas.photoTrace") || "[]"); }
+      catch (e) { return []; }
+    };
+
     function attachOne(input) {
       try {
         if (!input || input.dataset.cgPhotoLabelBound === "1") return;
         var tid = input.getAttribute("data-testid") || "";
+        cgTrace("attachOne-seen", { tid: tid });
         // The bundle uses `${testIdPrefix}-input` for the file input itself,
         // see source: input.testId=`input-${c}` where c is testIdPrefix.
         // i.e. cap-photo → "input-cap-photo".
@@ -2482,14 +2510,16 @@ window.cgGoogleAuth = (function () {
         for (var key in INPUT_LABEL_BY_TESTID) {
           if (tid === "input-" + key || tid === key) { prefix = key; break; }
         }
-        if (!prefix) return;
+        if (!prefix) { cgTrace("attachOne-skip-no-prefix", { tid: tid }); return; }
+        cgTrace("attachOne-bound", { tid: tid, prefix: prefix });
         input.dataset.cgPhotoLabelBound = "1";
         input.addEventListener("change", function () {
           try {
             // Resolve label at capture time so visit 2 wins over visit 1.
             var label = resolveLabelDynamic(prefix);
+            cgTrace("change-fired", { tid: tid, prefix: prefix, label: label, hasFiles: !!(input.files && input.files[0]) });
             var f = input.files && input.files[0];
-            if (!f) return;
+            if (!f) { cgTrace("change-no-file", { tid: tid }); return; }
             var reader = new FileReader();
             reader.onload = function () {
               var url = reader.result;
@@ -4420,6 +4450,17 @@ window.cgGoogleAuth = (function () {
       // path. The admin pulls daybooks straight out of Drive now.
       var daybookDriveOk = false;
       try {
+        // DIAGNOSTIC: include the photo-interceptor trace in the daybook
+        // so we can see which inputs got bound and which change events
+        // fired during the session. Read once, just before serialising.
+        try {
+          d._photoTrace = (typeof window.cgPhotoTrace === "function") ? window.cgPhotoTrace() : [];
+          var fnMapNow = (typeof readCurrentFnMap === "function") ? readCurrentFnMap() : {};
+          d._fnMapAtUpload = Object.keys(fnMapNow).reduce(function (acc, k) {
+            acc[k] = (fnMapNow[k] || "").length || 0;
+            return acc;
+          }, {});
+        } catch (e) {}
         var daybookJson = JSON.stringify(d, null, 2);
         var daybookBytes = new TextEncoder().encode(daybookJson);
         var ddata = await driveUploadBytes(daybookBytes, "application/json", filename, folderId);

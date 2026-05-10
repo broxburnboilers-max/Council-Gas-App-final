@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en" class="dark">
-<!-- BUILD: gas-auditor-skip-photos-v1 2026-05-10 -->
+<!-- BUILD: gas-auditor-skip-photos-v2 2026-05-10 -->
   <head>
     <meta charset="UTF-8" />
     <title>Citizen Gas</title>
@@ -234,27 +234,29 @@
       letter-spacing:0.08em; text-transform:uppercase; cursor:pointer; display:none;
     ">Admin</button>
 
-    <!-- Owner-only Gas Auditor shortcut. Sits above the Admin button on the
-         engineer sign-in screen. On password match, this device is flagged
-         as 'gas auditor' and ALL photo gates are skipped for the duration of
-         the localStorage flag (cleared via the chip in the corner). -->
+    <!-- Owner-only Gas Auditor shortcut. Visible at all times (signed in or
+         out). Sits above the Admin button on the bottom-right. On password
+         match, this device is flagged as 'gas auditor' and ALL photo gates
+         are skipped until the orange chip is tapped. -->
     <button id="cg-signin-auditor-btn" type="button" aria-label="Gas Auditor login" style="
-      position:fixed; left:50%; transform:translateX(-50%); bottom:60px; z-index:9997;
-      background:transparent; color:#9aa6ad; border:1px solid #3a4a55;
-      border-radius:999px; padding:8px 18px; font:600 12px/1 ui-sans-serif,system-ui,'Segoe UI',Roboto,sans-serif;
-      letter-spacing:0.08em; text-transform:uppercase; cursor:pointer; display:none;
-    ">Gas Auditor Login</button>
+      position:fixed; right:16px; bottom:64px; z-index:9998;
+      background:rgba(58,74,85,0.95); color:#fff; border:0;
+      border-radius:999px; padding:10px 16px;
+      font:700 12px/1 ui-sans-serif,system-ui,'Segoe UI',Roboto,sans-serif;
+      letter-spacing:0.04em; text-transform:uppercase; cursor:pointer;
+      box-shadow:0 4px 16px rgba(0,0,0,0.35);
+    ">Gas Auditor</button>
 
     <!-- Visible chip when gas-auditor mode is active so it's never silently
-         engaged. Tap to disable. -->
+         engaged. Tap to disable. Sits where the Gas Auditor login pill was. -->
     <button id="cg-auditor-chip" type="button" aria-label="Gas Auditor mode active — tap to disable" style="
-      position:fixed; right:16px; bottom:16px; z-index:9998;
+      position:fixed; right:16px; bottom:64px; z-index:9999;
       background:#f2682a; color:#fff; border:none;
-      border-radius:999px; padding:8px 14px;
-      font:700 11px/1 ui-sans-serif,system-ui,'Segoe UI',Roboto,sans-serif;
-      letter-spacing:0.06em; text-transform:uppercase; cursor:pointer; display:none;
-      box-shadow:0 2px 10px rgba(0,0,0,0.35);
-    ">Auditor mode · tap to exit</button>
+      border-radius:999px; padding:10px 16px;
+      font:700 12px/1 ui-sans-serif,system-ui,'Segoe UI',Roboto,sans-serif;
+      letter-spacing:0.04em; text-transform:uppercase; cursor:pointer; display:none;
+      box-shadow:0 4px 16px rgba(0,0,0,0.35);
+    ">Auditor on · tap to exit</button>
 
     <script>
     // BUG-FIX (Photo capture loss):
@@ -862,9 +864,11 @@
         adminBtn.style.display = isSignedIn() ? "inline-flex" : "none";
         // Sign-in screen Admin chip: shown only when not signed in.
         signinAdmin.style.display = isSignedIn() ? "none" : "inline-flex";
-        // Gas Auditor button: shown only when not signed in (matches Admin).
-        if (auditorBtn) auditorBtn.style.display = isSignedIn() ? "none" : "inline-flex";
-        // Auditor active chip: shown whenever the flag is set (signed in or not).
+        // Gas Auditor button: ALWAYS shown (signed in or out) so the owner
+         // can flip the flag on/off at any moment. Hidden only when auditor
+         // mode is already active (the orange chip takes its place).
+        if (auditorBtn) auditorBtn.style.display = window.cgIsGasAuditor() ? "none" : "inline-flex";
+        // Auditor active chip: shown whenever the flag is set.
         if (auditorChip) auditorChip.style.display = window.cgIsGasAuditor() ? "inline-flex" : "none";
       }
 

@@ -88,10 +88,29 @@
               changed = true;
             }
           }
-          // Prune empty date-named folders.
+          // Prune date-named folders that contain no GSC certs. WN records
+          // do not count — the GSC page filters them out, so a date folder
+          // containing only WNs shows "0 certificates" and clutters the list.
+          // The WN tab doesn't use folders so dropping the gscFolder pointer
+          // on those WNs has no visible side effect.
           var used = {};
           for (var k = 0; k < recs.length; k++) {
-            if (recs[k] && recs[k].gscFolder) used[recs[k].gscFolder] = 1;
+            var rk = recs[k];
+            if (!rk || !rk.gscFolder) continue;
+            if (!rk.type || rk.type === "gsc") used[rk.gscFolder] = 1;
+          }
+          var toPrune = {};
+          for (var fi = 0; fi < folders.length; fi++) {
+            var ff = folders[fi];
+            if (!ff) continue;
+            if (dateRegex().test(ff.name || "") && !used[ff.id]) toPrune[ff.id] = 1;
+          }
+          for (var ri = 0; ri < recs.length; ri++) {
+            var rr = recs[ri];
+            if (rr && rr.gscFolder && toPrune[rr.gscFolder]) {
+              rr.gscFolder = null;
+              changed = true;
+            }
           }
           var pruned = folders.filter(function (f) {
             if (!f) return false;
@@ -109,7 +128,7 @@
         } catch (e) { /* never block boot */ }
       })();
     </script>
-    <!-- BUILD: oauth-drive-v1 2026-05-09 -->
+    <!-- BUILD: prune-wn-only-date-folders-v1 2026-05-10 -->
     <script type="module" crossorigin src="./assets/index-Zyqhj0a4.js"></script>
     <!-- Google Identity Services for OAuth-based Drive photo fetch. -->
     <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -1562,18 +1581,41 @@
         changedRecs = true;
       }
     }
-    // Drop any date-named folder that no longer contains records. Manual
+    // Drop any date-named folder that no longer contains GSC certs. Manual
     // (non-date) folders are kept even if empty so the user's organisation
-    // survives.
+    // survives. WN-only records do NOT keep a date folder alive — the GSC
+    // page filters out WN records, so an otherwise-empty date folder shows
+    // "0 certificates" and just clutters the list. The WN itself is still
+    // visible under the Warning Notices tab regardless of folder.
     var usedFolderIds = {};
     for (var k = 0; k < recs.length; k++) {
-      if (recs[k] && recs[k].gscFolder) usedFolderIds[recs[k].gscFolder] = 1;
+      var rk = recs[k];
+      if (!rk || !rk.gscFolder) continue;
+      var isGsc = (!rk.type || rk.type === "gsc");
+      if (isGsc) usedFolderIds[rk.gscFolder] = 1;
+    }
+    // For any record whose gscFolder points at a date-named folder we are
+    // about to prune, clear that pointer so the record is no longer linked
+    // to a non-existent folder.
+    var dateFolderIdsToPrune = {};
+    for (var fi = 0; fi < folders.length; fi++) {
+      var ff = folders[fi];
+      if (!ff) continue;
+      var isDate = /^\d{2}\/\d{2}\/\d{4}$/.test(ff.name || "");
+      if (isDate && !usedFolderIds[ff.id]) dateFolderIdsToPrune[ff.id] = 1;
+    }
+    for (var ri = 0; ri < recs.length; ri++) {
+      var rr = recs[ri];
+      if (rr && rr.gscFolder && dateFolderIdsToPrune[rr.gscFolder]) {
+        rr.gscFolder = null;
+        changedRecs = true;
+      }
     }
     var prunedFolders = folders.filter(function (f) {
       if (!f) return false;
       var isDateFolder = /^\d{2}\/\d{2}\/\d{4}$/.test(f.name || "");
       if (!isDateFolder) return true;       // keep manual folders
-      return !!usedFolderIds[f.id];          // drop empty date folders
+      return !!usedFolderIds[f.id];          // drop date folders with no GSC certs
     });
     if (prunedFolders.length !== folders.length) {
       folders = prunedFolders;

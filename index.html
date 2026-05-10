@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en" class="dark">
-<!-- BUILD: drive-photo-no-route-fallback-v3 2026-05-09 -->
+<!-- BUILD: drive-photo-pin-merge-v4 2026-05-10 -->
   <head>
     <meta charset="UTF-8" />
     <title>Citizen Gas</title>
@@ -2514,13 +2514,21 @@ window.cgGoogleAuth = (function () {
                   window.cgPhotoSections.setPhoto(label, url);
                 }
               } catch (e) {}
-              // Also stamp the most-recent bucket entry with the label so
-              // the legacy fallback path produces the right filename even
-              // if the functionMap pin somehow doesn't fire.
+              // Stamp the bucket entry whose dataUrl matches THIS photo
+              // with the right label, so legacy fallback can reconstruct
+              // a correct filename even if the functionMap pin is lost.
+              //
+              // Why match by dataUrl, not "last unstamped":
+              // On two-photo screens (cap-tightness, documentation) the
+              // FileReader prototype hook pushes photo #1, then photo #2.
+              // Photo #1's testid handler fires first and (under the old
+              // code) stamped "the last unstamped" — but #2 might have
+              // already been pushed, so #1's label landed on #2's bucket
+              // entry. Identifying by dataUrl is unambiguous.
               try {
                 var b = window.__cgPhotoBucket || [];
                 for (var i = b.length - 1; i >= 0; i--) {
-                  if (b[i] && !b[i].fnLabel) { b[i].fnLabel = label; break; }
+                  if (b[i] && b[i].dataUrl === url) { b[i].fnLabel = label; break; }
                 }
               } catch (e) {}
             };
@@ -3823,12 +3831,33 @@ window.cgGoogleAuth = (function () {
           // storing { photos, functionMap } when we have either.
           const fnMap = readCurrentFnMap();
           const fnHasAny = fnMap && Object.keys(fnMap).length > 0;
-          if (photos.length || fnHasAny) {
-            pin[newEntryId] = { photos: photos, functionMap: fnHasAny ? fnMap : null };
+          // Re-entrancy preservation: React frequently writes the queue
+          // multiple times for the same entry id (state updates, finalise,
+          // etc.). On the SECOND call sessionStorage's fnMap is empty
+          // (we cleared it on the first call), so a naive
+          // `pin[id] = { functionMap: fnHasAny ? fnMap : null }`
+          // would clobber the good pin with functionMap=null and force
+          // sweepQueue down the legacy fallback path (capture-order, no
+          // labels). Merge instead: keep whichever side has data.
+          var existingPin = pin[newEntryId] && typeof pin[newEntryId] === "object" && !Array.isArray(pin[newEntryId])
+            ? pin[newEntryId]
+            : null;
+          var existingPhotos = existingPin && Array.isArray(existingPin.photos) ? existingPin.photos : [];
+          var existingFnMap  = existingPin && existingPin.functionMap && typeof existingPin.functionMap === "object"
+            ? existingPin.functionMap
+            : null;
+          var mergedPhotos   = (photos && photos.length) ? photos : existingPhotos;
+          var mergedFnMap    = fnHasAny ? fnMap : existingFnMap;
+          if (mergedPhotos.length || (mergedFnMap && Object.keys(mergedFnMap).length > 0)) {
+            pin[newEntryId] = { photos: mergedPhotos, functionMap: mergedFnMap || null };
             writePhotoPin(pin);
           }
-          // Clear the in-progress per-job map now this queue entry has
-          // captured it — keeps a fresh map for the next property.
+          // Only clear the live sessionStorage fnMap when we actually
+          // stored fresh content from it on THIS call. If we just
+          // re-used existing pin data, leave sessionStorage alone — a
+          // later genuine first-write for a NEW property will pick up.
+          // (Old code unconditionally cleared, which is what caused the
+          // overwrite-with-null on re-entrant writes.)
           if (fnHasAny) clearCurrentFnMap();
         } catch (e) {}
       }

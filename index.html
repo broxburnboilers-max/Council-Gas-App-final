@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en" class="dark">
-<!-- BUILD: drive-photo-trace-v5 2026-05-10 -->
+<!-- BUILD: drive-photo-compress-native-v6 2026-05-10 -->
   <head>
     <meta charset="UTF-8" />
     <title>Citizen Gas</title>
@@ -2524,43 +2524,51 @@ window.cgGoogleAuth = (function () {
             reader.onload = function () {
               var url = reader.result;
               if (typeof url !== "string") return;
-              // CRITICAL: pass `label` as the hardLabel into pushIfNew so
-              // tagAndMap doesn't fall back to cgInferCurrentLabel(), which
-              // would return the FIRST label for the route (e.g. on the
-              // cap-tightness page it always returns "Cap the cooker")
-              // and overwrite functionMap["Cap the cooker"] with the
-              // tightness photo's dataUrl. Without this, the second photo
-              // on a two-photo screen clobbers the first.
-              try {
-                if (typeof window.cgPushPhotoIfNew === "function") {
-                  window.cgPushPhotoIfNew(url, label);
-                }
-              } catch (e) {}
-              // Belt-and-braces: also write directly under the correct
-              // label. setCurrentFnPhoto is the source of truth that
-              // buildRecord reads from at queue time.
-              try {
-                if (window.cgPhotoSections && typeof window.cgPhotoSections.setPhoto === "function") {
-                  window.cgPhotoSections.setPhoto(label, url);
-                }
-              } catch (e) {}
-              // Stamp the bucket entry whose dataUrl matches THIS photo
-              // with the right label, so legacy fallback can reconstruct
-              // a correct filename even if the functionMap pin is lost.
-              //
-              // Why match by dataUrl, not "last unstamped":
-              // On two-photo screens (cap-tightness, documentation) the
-              // FileReader prototype hook pushes photo #1, then photo #2.
-              // Photo #1's testid handler fires first and (under the old
-              // code) stamped "the last unstamped" — but #2 might have
-              // already been pushed, so #1's label landed on #2's bucket
-              // entry. Identifying by dataUrl is unambiguous.
-              try {
-                var b = window.__cgPhotoBucket || [];
-                for (var i = b.length - 1; i >= 0; i--) {
-                  if (b[i] && b[i].dataUrl === url) { b[i].fnLabel = label; break; }
-                }
-              } catch (e) {}
+              // ROOT CAUSE FIX (v6 — found via _photoTrace in v5 daybook):
+              // The native bundle photo inputs (cap-photo, tightness-photo,
+              // gas-works-photo, gas-iso-photo) deliver UNCOMPRESSED dataUrls
+              // that are typically 7–9 MB each. The injected photo boxes
+              // (Door, Boiler, etc) call compressDataUrl before storing, so
+              // they land at ~95–110 KB. We were skipping that compression
+              // for the native inputs, so setCurrentFnPhoto's JSON.stringify
+              // on the whole sessionStorage map blew the ~5–10 MB quota and
+              // silently wiped the entire map (try/catch swallowed it).
+              // _fnMapAtUpload was {} despite many setCurrentFnPhoto calls.
+              // Fix: compress to the same target as the photo box (1600 px,
+              // q=0.78) before storing. Push to bucket and stamp using the
+              // COMPRESSED url so the bucket-stamp's dataUrl-match works.
+              function storePhoto(finalUrl) {
+                try {
+                  if (typeof window.cgPushPhotoIfNew === "function") {
+                    window.cgPushPhotoIfNew(finalUrl, label);
+                  }
+                } catch (e) {}
+                try {
+                  if (window.cgPhotoSections && typeof window.cgPhotoSections.setPhoto === "function") {
+                    window.cgPhotoSections.setPhoto(label, finalUrl);
+                  }
+                } catch (e) {}
+                try {
+                  var b = window.__cgPhotoBucket || [];
+                  for (var i = b.length - 1; i >= 0; i--) {
+                    if (b[i] && b[i].dataUrl === finalUrl) { b[i].fnLabel = label; break; }
+                  }
+                } catch (e) {}
+              }
+              if (typeof compressDataUrl === "function") {
+                try {
+                  var p = compressDataUrl(url, 1600, 0.78);
+                  if (p && typeof p.then === "function") {
+                    p.then(function (c) { storePhoto(c || url); })
+                     .catch(function () { storePhoto(url); });
+                  } else {
+                    // Older signature: callback(compressed)
+                    compressDataUrl(url, function (c) { storePhoto(c || url); });
+                  }
+                } catch (e) { storePhoto(url); }
+              } else {
+                storePhoto(url);
+              }
             };
             reader.readAsDataURL(f);
           } catch (e) {}

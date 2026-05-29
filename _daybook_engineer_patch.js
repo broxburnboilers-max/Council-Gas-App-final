@@ -19,8 +19,8 @@
   };
   const COMPANY_DEFAULTS = {
     companyName: "Andrew King-Page",
-    companyAddr: "18 Mauldeth Rd Broxburn",
-    companyPostcode: "EH52 6FB",
+    companyAddr: "47 Alspath Road, Meriden",
+    companyPostcode: "CV7 7LU",
     companyTel: "07961768920",
     companyEmail: "akingpage@gmail.com",
     companyWeb: "www.westlothiangas.com",

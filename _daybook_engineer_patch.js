@@ -18,7 +18,7 @@
     clientEmail: "admin@dsplumbingsolutions.co.uk",
   };
   const COMPANY_DEFAULTS = {
-    companyName: "West Lothian Gas Ltd",
+    companyName: "Andrew King-Page",
     companyAddr: "18 Mauldeth Rd Broxburn",
     companyPostcode: "EH52 6FB",
     companyTel: "07961768920",

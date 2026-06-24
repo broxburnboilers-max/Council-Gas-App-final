@@ -1517,8 +1517,8 @@
         try { profile = JSON.parse(localStorage.getItem("citizenGas.engineerProfile") || "null"); } catch (e) {}
         if (!profile) return;
         var nameInput = document.querySelector('input[placeholder="e.g. James Smith"]');
-        var regInput  = document.querySelector('input[placeholder="e.g. 927997"]');
-        var licInput  = document.querySelector('input[placeholder="e.g. 5927846"]');
+        var regInput  = document.querySelector('input[placeholder="e.g. 000000"]');
+        var licInput  = document.querySelector('input[placeholder="e.g. 0000000"]');
         if (nameInput && !nameInput.value && profile.fullName) setReactInputValue(nameInput, profile.fullName);
         if (regInput && !regInput.value && profile.gasSafeRegNo) setReactInputValue(regInput, profile.gasSafeRegNo);
         if (licInput && !licInput.value && profile.licenceNo) setReactInputValue(licInput, profile.licenceNo);
